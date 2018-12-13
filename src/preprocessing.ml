@@ -87,7 +87,7 @@ end = struct
     | Some x -> x
     | None ->
       die "I don't know what ppx rewriters set %s correspond to."
-        (Digest.to_hex y)
+        (Digest.to_string y)
 end
 
 let pped_path path ~suffix =
@@ -192,9 +192,9 @@ module Driver = struct
       let f x = Lib_name.encode (Lib.name (Lazy.force x.lib)) in
       ((1, 0),
        record_fields Dune @@
-         [ field "flags" Ordered_set_lang.Unexpanded.encode
+         [ field "flags" Ordered_set_lang.Unexpanded.encode_and_upgrade
              t.info.flags
-         ; field "lint_flags" Ordered_set_lang.Unexpanded.encode
+         ; field "lint_flags" Ordered_set_lang.Unexpanded.encode_and_upgrade
              t.info.lint_flags
          ; field "main" string t.info.main
          ; field_l "replaces" f (Result.ok_exn t.replaces)
@@ -457,7 +457,7 @@ let gen_rules sctx components =
   | _ -> ()
 
 let ppx_driver_exe sctx libs ~dir_kind =
-  let key = Digest.to_hex (Key.of_libs ~dir_kind libs |> Key.encode) in
+  let key = Digest.to_string (Key.of_libs ~dir_kind libs |> Key.encode) in
   ppx_exe sctx ~key ~dir_kind
 
 module Compat_ppx_exe_kind = struct
@@ -665,7 +665,7 @@ let make sctx ~dir ~expander ~dep_kind ~lint ~preprocess
                   ~expander
                   ~dep_kind
                   ~targets:(Static [dst])
-                  ~targets_dir:dir))
+                  ~targets_dir:(Path.parent_exn dst)))
            |> setup_reason_rules sctx in
          if lint then lint_module ~ast ~source:m;
          ast)

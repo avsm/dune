@@ -6,7 +6,7 @@ module Local : sig
   val to_sexp : t -> Sexp.t
   val equal : t -> t -> bool
   val to_string : t -> string
-
+  val pp : Format.formatter -> t -> unit
   module L : sig
     val relative : ?error_loc:Loc.t -> t -> string list -> t
   end
@@ -43,6 +43,8 @@ val compare : t -> t -> Ordering.t
 (** a directory is smaller than its descendants *)
 
 val equal : t -> t -> bool
+
+val hash : t -> int
 
 module Set : sig
   include Set.S with type elt = t
