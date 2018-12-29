@@ -156,9 +156,7 @@ module Pps_and_flags = struct
       | List _ -> list string >>| fun l -> Right l
 
     let split l =
-      let pps, flags =
-        List.partition_map l ~f:(fun x -> x)
-      in
+      let pps, flags = List.partition_map l ~f:Fn.id in
       (pps, List.concat flags)
 
     let decode = list item >>| split
@@ -737,41 +735,10 @@ module Mode_conf = struct
 end
 
 module Library = struct
-  module Variants = struct
-    let syntax =
-      let syntax =
-        Syntax.create ~name:"in_development_do_not_use_variants"
-          ~desc:"the experimental variants feature"
-          [ (0, 1) ]
-      in
-      Dune_project.Extension.register_simple ~experimental:true
-        syntax (Dune_lang.Decoder.return []);
-      syntax
-  end
-
-  module Wrapped = struct
-    type t =
-      | Simple of bool
-      | Yes_with_transition of string
-
-    let decode =
-      sum
-        [ "true", return (Simple true)
-        ; "false", return (Simple false)
-        ; "transition",
-          Syntax.since Stanza.syntax (1, 2) >>= fun () ->
-          string >>| fun x -> Yes_with_transition x
-        ]
-
-    let field = field_o "wrapped" (located decode)
-
-    let to_bool = function
-      | Simple b -> b
-      | Yes_with_transition _ -> true
-
-    let value = function
-      | None -> Simple true
-      | Some (_loc, w) -> w
+  module Inherited = struct
+    type 'a t =
+      | This of 'a
+      | From of (Loc.t * Lib_name.t)
   end
 
   module Stdlib = struct
@@ -806,6 +773,28 @@ module Library = struct
          })
   end
 
+  module Wrapped = struct
+    include Wrapped
+
+    let value = function
+      | Inherited.From _ -> None
+      | This s -> Some (to_bool s)
+
+    let default = Simple true
+
+    let make ~wrapped ~implements : t Inherited.t =
+      match wrapped, implements with
+      | None, None -> This default
+      | None, Some w -> From w
+      | Some (_loc, w), None -> This w
+      | Some (loc, _), Some _ ->
+        of_sexp_error loc
+          "Wrapped cannot be set for implementations. \
+           It is inherited from the virtual library."
+
+    let field = field_o "wrapped" (located decode)
+  end
+
   type t =
     { name                     : (Loc.t * Lib_name.Local.t)
     ; public                   : Public_lib.t option
@@ -813,7 +802,7 @@ module Library = struct
     ; install_c_headers        : string list
     ; ppx_runtime_libraries    : (Loc.t * Lib_name.t) list
     ; modes                    : Mode_conf.Set.t
-    ; kind                     : Dune_package.Lib.Kind.t
+    ; kind                     : Lib_kind.t
     ; c_flags                  : Ordered_set_lang.Unexpanded.t
     ; c_names                  : (Loc.t * string) list
     ; cxx_flags                : Ordered_set_lang.Unexpanded.t
@@ -822,7 +811,7 @@ module Library = struct
     ; c_library_flags          : Ordered_set_lang.Unexpanded.t
     ; self_build_stubs_archive : string option
     ; virtual_deps             : (Loc.t * Lib_name.t) list
-    ; wrapped                  : Wrapped.t
+    ; wrapped                  : Wrapped.t Inherited.t
     ; optional                 : bool
     ; buildable                : Buildable.t
     ; dynlink                  : Dynlink_supported.t
@@ -856,8 +845,7 @@ module Library = struct
        and virtual_deps =
          field "virtual_deps" (list (located Lib_name.decode)) ~default:[]
        and modes = field "modes" Mode_conf.Set.decode ~default:Mode_conf.Set.default
-       and kind = field "kind" Dune_package.Lib.Kind.decode
-                    ~default:Dune_package.Lib.Kind.Normal
+       and kind = field "kind" Lib_kind.decode ~default:Lib_kind.Normal
        and wrapped = Wrapped.field
        and optional = field_b "optional"
        and self_build_stubs_archive =
@@ -871,11 +859,11 @@ module Library = struct
        and dune_version = Syntax.get_exn Stanza.syntax
        and virtual_modules =
          field_o "virtual_modules" (
-           Syntax.since Variants.syntax (0, 1)
+           Syntax.since Stanza.syntax (1, 7)
            >>= fun () -> Ordered_set_lang.decode)
        and implements =
          field_o "implements" (
-           Syntax.since Variants.syntax (0, 1)
+           Syntax.since Stanza.syntax (1, 7)
            >>= fun () -> located Lib_name.decode)
        and private_modules =
          field_o "private_modules" (
@@ -884,11 +872,12 @@ module Library = struct
        and stdlib =
          field_o "stdlib" (Syntax.since Stdlib.syntax (0, 1) >>> Stdlib.decode)
        in
+       let wrapped = Wrapped.make ~wrapped ~implements in
        let name =
          let open Syntax.Version.Infix in
          match name, public with
          | Some (loc, res), _ ->
-           let wrapped = Wrapped.to_bool (Wrapped.value wrapped) in
+           let wrapped = Wrapped.value wrapped in
            (loc, Lib_name.Local.validate (loc, res) ~wrapped)
          | None, Some { name = (loc, name) ; _ }  ->
            if dune_version >= (1, 1) then
@@ -919,15 +908,6 @@ module Library = struct
             |> Option.value_exn)
            "A library cannot be both virtual and implement %s"
            (Lib_name.to_string impl));
-       begin match virtual_modules, wrapped, implements with
-       | Some _, Some (loc, Wrapped.Simple false), _ ->
-         of_sexp_error loc "A virtual library must be wrapped"
-       | _, Some (loc, _), Some _ ->
-         of_sexp_error loc
-           "Wrapped cannot be set for implementations. \
-            It is inherited from the virtual library."
-       | _, _, _ -> ()
-       end;
        let self_build_stubs_archive =
          let loc, self_build_stubs_archive = self_build_stubs_archive in
          let err =
@@ -960,7 +940,7 @@ module Library = struct
        ; c_library_flags
        ; self_build_stubs_archive
        ; virtual_deps
-       ; wrapped = Wrapped.value wrapped
+       ; wrapped
        ; optional
        ; buildable
        ; dynlink = Dynlink_supported.of_bool (not no_dynlink)
@@ -1006,18 +986,23 @@ module Library = struct
   let is_virtual t = Option.is_some t.virtual_modules
   let is_impl t = Option.is_some t.implements
 
+  let obj_dir ~dir t =
+    Obj_dir.make_local ~dir
+      ~has_private_modules:(t.private_modules <> None)
+      (snd t.name)
+
   module Main_module_name = struct
-    type t =
-      | This of Module.Name.t option
-      | Inherited_from of (Loc.t * Lib_name.t)
+    type t = Module.Name.t option Inherited.t
   end
 
   let main_module_name t : Main_module_name.t =
-    match t.implements, Wrapped.to_bool t.wrapped with
-    | Some x, true -> Inherited_from x
-    | Some _, false -> assert false
-    | None, false -> This None
-    | None, true -> This (Some (Module.Name.of_local_lib_name (snd t.name)))
+    match t.implements, t.wrapped with
+    | Some x, From _ -> From x
+    | Some _, This _ (* cannot specify for wrapped for implements *)
+    | None, From _ -> assert false (* cannot inherit for normal libs *)
+    | None, This (Simple false) -> This None
+    | None, This (Simple true | Yes_with_transition _) ->
+      This (Some (Module.Name.of_local_lib_name (snd t.name)))
 
   let special_compiler_module t (m : Module.t) =
     match t.stdlib with
@@ -1256,7 +1241,7 @@ module Executables = struct
           in
           let public_names =
             match public_names with
-            | None -> List.map names ~f:(fun _ -> (Loc.none, None))
+            | None -> List.map names ~f:(Fn.const (Loc.none, None))
             | Some pns -> pns
           in
           List.map2 names public_names

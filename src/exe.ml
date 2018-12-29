@@ -124,14 +124,13 @@ let link_exe
   let sctx     = CC.super_context cctx in
   let ctx      = SC.context       sctx in
   let dir      = CC.dir           cctx in
-  let obj_dir  = CC.obj_dir       cctx in
   let requires = CC.requires      cctx in
   let expander = CC.expander      cctx in
   let mode = linkage.mode in
   let exe = Path.relative dir (name ^ linkage.ext) in
   let compiler = Option.value_exn (Context.compiler ctx mode) in
   let artifacts ~ext modules =
-    List.map modules ~f:(Module.obj_file ~obj_dir ~ext)
+    List.map modules ~f:(Module.obj_file ~ext)
   in
   let modules_and_cm_files =
     Build.memoize "cm files"
@@ -166,7 +165,7 @@ let link_exe
        ; A "-o"; Target exe
        ; As linkage.flags
        ; Dyn (fun (_, _, link_flags) -> As link_flags)
-       ; Arg_spec.of_result_map arg_spec_for_requires ~f:(fun x -> x)
+       ; Arg_spec.of_result_map arg_spec_for_requires ~f:Fn.id
        ; Dyn (fun (cm_files, _, _) -> Deps cm_files)
        ]);
   if linkage.ext = ".bc" then

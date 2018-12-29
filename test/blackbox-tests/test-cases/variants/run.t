@@ -1,15 +1,3 @@
-Variant feature is auto enabled when virtual_modules is used
-
-  $ dune build --root variants-without-using
-  File "dune", line 3, characters 1-25:
-  3 |  (virtual_modules foobar))
-       ^^^^^^^^^^^^^^^^^^^^^^^^
-  Error: 'virtual_modules' is only available since version 0.1 of the experimental variants feature
-  [1]
-
-  $ dune build --root variants-using
-  Entering directory 'variants-using'
-
 virtual libraries may not implement their virtual modules
 
   $ dune build --root invalid-virtual-lib
@@ -17,27 +5,33 @@ virtual libraries may not implement their virtual modules
   File "dune", line 3, characters 18-21:
   3 |  (virtual_modules foo bar))
                         ^^^
-  Error: Module Foo has an implementation, it cannot be listed here
+  Error: The following modules have an implementation, they cannot be listed as virtual:
+  - Foo
   [1]
 
   $ cd module-fields && ocaml test.ml
   impl: true. modules_without_implementation: true. virtual_modules: true. private_modules: true
-  File "dune", line 3, characters 33-34:
-  3 |  (modules_without_implementation m)
-                                       ^
-  Error: Module M has an implementation, it cannot be listed here
+  File "dune", line 4, characters 18-19:
+  4 |  (virtual_modules m)
+                        ^
+  Error: The following modules are declared as virtual and private:
+  - M
+  This is not possible.
   -------------------------
   impl: true. modules_without_implementation: true. virtual_modules: false. private_modules: true
   File "dune", line 3, characters 33-34:
   3 |  (modules_without_implementation m)
                                        ^
-  Error: Module M has an implementation, it cannot be listed here
+  Error: The following modules have an implementation, they cannot be listed as modules_without_implementation:
+  - M
   -------------------------
   impl: true. modules_without_implementation: false. virtual_modules: true. private_modules: true
   File "dune", line 3, characters 18-19:
   3 |  (virtual_modules m)
                         ^
-  Error: Module M has an implementation, it cannot be listed here
+  Error: The following modules are declared as virtual and private:
+  - M
+  This is not possible.
   -------------------------
   impl: true. modules_without_implementation: false. virtual_modules: false. private_modules: true
   -------------------------
@@ -45,7 +39,7 @@ virtual libraries may not implement their virtual modules
   File "dune", line 4, characters 18-19:
   4 |  (virtual_modules m)
                         ^
-  Error: These modules appear in the virtual_libraries and modules_without_implementation fields: 
+  Error: The following modules are declared as virtual and private:
   - M
   This is not possible.
   -------------------------
@@ -55,7 +49,7 @@ virtual libraries may not implement their virtual modules
   File "dune", line 3, characters 18-19:
   3 |  (virtual_modules m)
                         ^
-  Error: The following modules are declared as virtual and private: 
+  Error: The following modules are declared as virtual and private:
   - M
   This is not possible.
   -------------------------
@@ -72,22 +66,26 @@ virtual libraries may not implement their virtual modules
   This will become an error in the future.
   -------------------------
   impl: true. modules_without_implementation: true. virtual_modules: true. private_modules: false
-  File "dune", line 3, characters 33-34:
-  3 |  (modules_without_implementation m)
-                                       ^
-  Error: Module M has an implementation, it cannot be listed here
+  File "dune", line 4, characters 18-19:
+  4 |  (virtual_modules m))
+                        ^
+  Error: These modules appear in the virtual_libraries and modules_without_implementation fields:
+  - M
+  This is not possible.
   -------------------------
   impl: true. modules_without_implementation: true. virtual_modules: false. private_modules: false
   File "dune", line 3, characters 33-34:
   3 |  (modules_without_implementation m))
                                        ^
-  Error: Module M has an implementation, it cannot be listed here
+  Error: The following modules have an implementation, they cannot be listed as modules_without_implementation:
+  - M
   -------------------------
   impl: true. modules_without_implementation: false. virtual_modules: true. private_modules: false
   File "dune", line 3, characters 18-19:
   3 |  (virtual_modules m))
                         ^
-  Error: Module M has an implementation, it cannot be listed here
+  Error: The following modules have an implementation, they cannot be listed as virtual:
+  - M
   -------------------------
   impl: true. modules_without_implementation: false. virtual_modules: false. private_modules: false
   -------------------------
@@ -95,7 +93,7 @@ virtual libraries may not implement their virtual modules
   File "dune", line 4, characters 18-19:
   4 |  (virtual_modules m))
                         ^
-  Error: These modules appear in the virtual_libraries and modules_without_implementation fields: 
+  Error: These modules appear in the virtual_libraries and modules_without_implementation fields:
   - M
   This is not possible.
   -------------------------
@@ -171,6 +169,7 @@ Install files for implemenations and virtual libs have all the artifacts:
     "_build/install/default/lib/vlib/foo.mli" {"foo.mli"}
     "_build/install/default/lib/vlib/opam" {"opam"}
     "_build/install/default/lib/vlib/vlib.cmi" {"vlib.cmi"}
+    "_build/install/default/lib/vlib/vlib.cmo" {"vlib.cmo"}
     "_build/install/default/lib/vlib/vlib.cmt" {"vlib.cmt"}
     "_build/install/default/lib/vlib/vlib.cmx" {"vlib.cmx"}
     "_build/install/default/lib/vlib/vlib.ml" {"vlib.ml"}
@@ -210,6 +209,22 @@ virtual lib
            foo alias default
   impl's own Priv.run
   implementation of foo
+
+Unwrapped virtual library
+  $ dune build --root unwrapped
+  Entering directory 'unwrapped'
+           foo alias default
+  Running from vlib_more
+  running implementation
+
+Unwrapped virtual library
+  $ dune build @install --root unwrapped/vlib
+  Entering directory 'unwrapped/vlib'
+  $ env OCAMLPATH=unwrapped/vlib/_build/install/default/lib dune build --root unwrapped/impl --debug-dependency-path
+  Entering directory 'unwrapped/impl'
+           foo alias default
+  Running from vlib_more
+  running implementation
 
 Implementations may not provide a library interface module unless it is virtual.
 There should be an error message that clarifies this.
@@ -261,11 +276,63 @@ First we create an external library
   Entering directory 'implements-external/vlib'
 
 Then we make sure that we can implement it
-  $ env OCAMLPATH=implements-external/vlib/_build/install/default/lib dune build --root implements-external/impl
+  $ env OCAMLPATH=implements-external/vlib/_build/install/default/lib dune build --root implements-external/impl --debug-dependency-path
   Entering directory 'implements-external/impl'
-  File "impl-lib/dune", line 3, characters 13-17:
-  3 |  (implements vlib))
-                   ^^^^
-  Error: Library "vlib" is not virtual. It cannot be implemented by "impl".
-  -> required by library "impl" in _build/default/impl-lib
-  [1]
+          test alias default
+  bar from vlib
+  Foo.run implemented
+
+Make sure that we can also implement native only variants
+  $ env OCAMLPATH=implements-external/vlib/_build/install/default/lib dune build --root implements-external/impl-native-only --debug-dependency-path
+  Entering directory 'implements-external/impl-native-only'
+           run alias default
+  implement virtual module
+
+We can implement external variants with mli only modules
+  $ env OCAMLPATH=implements-external/vlib/_build/install/default/lib dune build --root implements-external/impl-intf-only --debug-dependency-path
+  Entering directory 'implements-external/impl-intf-only'
+           run alias default
+  implemented mli only
+  magic number: 42
+
+Include variants and implementation information in dune-package
+  $ dune build --root dune-package-info
+  Entering directory 'dune-package-info'
+  (lang dune 1.7)
+  (name foo)
+  (library
+   (name foo.impl)
+   (kind normal)
+   (archives (byte impl/impl.cma) (native impl/impl.cmxa))
+   (plugins (byte impl/impl.cma) (native impl/impl.cmxs))
+   (foreign_archives (native impl/impl$ext_lib))
+   (requires foo.vlib)
+   (implements vlib)
+   (main_module_name Vlib)
+   (modes byte native)
+   (modules
+    (alias_module
+     (name Vlib__impl__)
+     (obj_name vlib__impl__)
+     (visibility public)
+     (impl))
+    (main_module_name Vlib)
+    (modules ((name Vmod) (obj_name vlib__Vmod) (visibility public) (impl)))
+    (wrapped true)))
+  (library
+   (name foo.vlib)
+   (kind normal)
+   (virtual)
+   (foreign_archives (native vlib/vlib$ext_lib))
+   (main_module_name Vlib)
+   (modes byte native)
+   (modules
+    (alias_module (name Vlib) (obj_name vlib) (visibility public) (impl))
+    (main_module_name Vlib)
+    (modules
+     ((name Vmod)
+      (obj_name vlib__Vmod)
+      (visibility public)
+      (kind virtual)
+      (intf)))
+    (wrapped true)))

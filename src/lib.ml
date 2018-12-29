@@ -146,18 +146,18 @@ type t =
     mutable sub_systems : Sub_system0.Instance.t Lazy.t Sub_system_name.Map.t
   }
 
-and db =
+type status =
+  | St_initializing of Id.t (* To detect cycles *)
+  | St_found        of t
+  | St_not_found
+  | St_hidden       of t * Error.Library_not_available.Reason.Hidden.t
+
+type db =
   { parent  : db option
   ; resolve : Lib_name.t -> resolve_result
   ; table   : (Lib_name.t, status) Hashtbl.t
   ; all     : Lib_name.t list Lazy.t
   }
-
-and status =
-  | St_initializing of Id.t (* To detect cycles *)
-  | St_found        of t
-  | St_not_found
-  | St_hidden       of t * Error.Library_not_available.Reason.Hidden.t
 
 and resolve_result =
   | Not_found
@@ -183,14 +183,14 @@ let plugins      t = t.info.plugins
 let jsoo_runtime t = t.info.jsoo_runtime
 let jsoo_archive t = t.info.jsoo_archive
 let unique_id    t = t.unique_id
+let modes        t = t.info.modes
 
 let virtual_     t = t.info.virtual_
 
 let src_dir t = t.info.src_dir
 let obj_dir t = t.info.obj_dir
-let private_obj_dir t = t.info.private_obj_dir
 
-let is_local t = Path.is_managed t.info.obj_dir
+let is_local t = Path.is_managed t.info.obj_dir.public_dir
 
 let status t = t.info.status
 
@@ -199,11 +199,22 @@ let foreign_objects t = t.info.foreign_objects
 let main_module_name t =
   match t.info.main_module_name with
   | This mmn -> Ok mmn
-  | Inherited_from _ ->
+  | From _ ->
     Option.value_exn t.implements >>| fun vlib ->
     match vlib.info.main_module_name with
     | This x -> x
-    | Inherited_from _ -> assert false
+    | From _ -> assert false
+
+let wrapped t =
+  match t.info.wrapped with
+  | None -> Ok None
+  | Some (This wrapped) -> Ok (Some wrapped)
+  | Some (From _) ->
+    Option.value_exn t.implements >>| fun vlib ->
+    match vlib.info.wrapped with
+    | Some (From _) (* can't inherit this value in virtual libs *)
+    | None -> assert false (* will always be specified in dune package *)
+    | Some (This x) -> Some x
 
 let package t =
   match t.info.status with
@@ -242,7 +253,7 @@ module L = struct
   let include_paths ts ~stdlib_dir =
     let dirs =
       List.fold_left ts ~init:Path.Set.empty ~f:(fun acc t ->
-        Path.Set.add acc (obj_dir t))
+        Path.Set.add acc (obj_dir t).public_dir)
     in
     Path.Set.remove dirs stdlib_dir
 
@@ -300,7 +311,7 @@ end
 module Lib_and_module = struct
   type nonrec t =
     | Lib of t
-    | Module of Module.t * Path.t (** obj_dir *)
+    | Module of Module.t
 
   let link_flags ts ~mode ~stdlib_dir =
     let libs = List.filter_map ts ~f:(function Lib lib -> Some lib | Module _ -> None) in
@@ -309,8 +320,8 @@ module Lib_and_module = struct
        List.map ts ~f:(function
          | Lib t ->
            Arg_spec.Deps (Mode.Dict.get t.info.archives mode)
-         | Module (m,obj_dir) ->
-           Dep (Module.cm_file_unsafe m ~obj_dir (Mode.cm_kind mode))
+         | Module m ->
+           Dep (Module.cm_file_unsafe m (Mode.cm_kind mode))
        ))
 
 end
@@ -728,7 +739,7 @@ and available_internal db (name : Lib_name.t) ~stack =
   resolve_dep db name ~allow_private_deps:true ~loc:Loc.none ~stack
   |> Result.is_ok
 
-and resolve_simple_deps db (names : ((Loc.t * Lib_name.t) list)) ~allow_private_deps ~stack =
+and resolve_simple_deps db names ~allow_private_deps ~stack =
   Result.List.map names ~f:(fun (loc, name) ->
     resolve_dep db name ~allow_private_deps ~loc ~stack)
 
@@ -739,7 +750,8 @@ and resolve_complex_deps db deps ~allow_private_deps ~stack =
         match (dep : Dune_file.Lib_dep.t) with
         | Direct (loc, name) ->
           let res =
-            resolve_dep db name ~allow_private_deps ~loc ~stack >>| fun x -> [x]
+            resolve_dep db name ~allow_private_deps ~loc ~stack
+            >>| List.singleton
           in
           (res, acc_selects)
         | Select { result_fn; choices; loc } ->
@@ -942,10 +954,12 @@ module DB = struct
     ; all    = Lazy.from_fun all
     }
 
-  let create_from_library_stanzas ?parent ~ext_lib ~ext_obj stanzas =
+  let create_from_library_stanzas ?parent ~has_native ~ext_lib ~ext_obj
+        stanzas =
     let map =
       List.concat_map stanzas ~f:(fun (dir, (conf : Dune_file.Library.t)) ->
-        let info = Lib_info.of_library_stanza ~dir ~ext_lib ~ext_obj conf in
+        let info =
+          Lib_info.of_library_stanza ~dir ~has_native ~ext_lib ~ext_obj conf in
         match conf.public with
         | None ->
           [Dune_file.Library.best_name conf, Resolve_result.Found info]
@@ -1180,6 +1194,13 @@ let report_lib_error ppf (e : Error.t) =
       Lib_name.pp_quoted impl.name
 
 let () =
+  Printexc.register_printer
+    (function
+      | Error e ->
+        Some (Format.asprintf "%a" report_lib_error e)
+      | _ -> None)
+
+let () =
   Report_error.register (fun exn ->
     match exn with
     | Error e ->
@@ -1202,8 +1223,10 @@ let () =
       Some (Report_error.make_printer ?loc ?hint pp)
     | _ -> None)
 
-let to_dune_lib ({ name ; info ; _ } as lib) ~dir =
+let to_dune_lib ({ name ; info ; _ } as lib) ~lib_modules ~dir =
   let add_loc = List.map ~f:(fun x -> (info.loc, x.name)) in
+  let virtual_ = Option.is_some info.virtual_ in
+  let lib_modules = Lib_modules.version_installed ~install_dir:dir lib_modules in
   Dune_package.Lib.make
     ~dir
     ~name
@@ -1216,10 +1239,11 @@ let to_dune_lib ({ name ; info ; _ } as lib) ~dir =
     ~foreign_archives:info.foreign_archives
     ~foreign_objects:info.foreign_objects
     ~jsoo_runtime:info.jsoo_runtime
-    ~pps:info.pps
     ~requires:(add_loc (requires_exn lib))
     ~ppx_runtime_deps:(add_loc (ppx_runtime_deps_exn lib))
+    ~modes:info.modes
     ~implements:info.implements
-    ~virtual_:None
+    ~virtual_
+    ~modules:(Some lib_modules)
     ~main_module_name:(to_exn (main_module_name lib))
     ~sub_systems:(Sub_system.dump_config lib)

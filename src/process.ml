@@ -319,7 +319,7 @@ let run_internal ?dir ?(stdout_to=Output.stdout) ?(stderr_to=Output.stderr)
   in
   Output.release stdout_to;
   Output.release stderr_to;
-  Scheduler.wait_for_process pid
+  Stats.with_process ~program:prog_str ~args (Scheduler.wait_for_process pid)
   >>| fun exit_status ->
   Option.iter response_file ~f:Path.unlink;
   let output =

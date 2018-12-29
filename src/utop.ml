@@ -83,6 +83,7 @@ let setup sctx ~dir =
   let expander = Super_context.expander sctx ~dir in
   let scope = Super_context.find_scope_by_dir sctx dir in
   let utop_exe_dir = utop_exe_dir ~dir in
+  let obj_dir = Obj_dir.make_exe ~dir:utop_exe_dir main_module_filename in
   let db = Scope.libs scope in
   let libs = libs_under_dir sctx ~db ~dir in
   let modules =
@@ -93,9 +94,11 @@ let setup sctx ~dir =
          ~impl:{ path   = Path.relative utop_exe_dir main_module_filename
                ; syntax = Module.Syntax.OCaml
                }
-         ~obj_name:exe_name)
+         ~obj_name:exe_name
+         ~kind:Impl
+         ~obj_dir)
   in
-  let loc = Loc.in_dir (Path.to_string dir) in
+  let loc = Loc.in_dir dir in
   let requires =
     let open Result.O in
     (loc, Lib_name.of_string_exn ~loc:(Some loc) "utop")
@@ -107,7 +110,7 @@ let setup sctx ~dir =
       ~super_context:sctx
       ~expander
       ~scope
-      ~dir:utop_exe_dir
+      ~obj_dir
       ~modules
       ~opaque:false
       ~requires

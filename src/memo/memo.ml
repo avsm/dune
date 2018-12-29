@@ -1,7 +1,9 @@
-open !Stdune
+open! Stdune
 open Fiber.O
 
-module type Data = Memo_intf.Data
+module type Input = Memo_intf.Input
+module type Output = Memo_intf.Output
+module type Decoder = Memo_intf.Decoder
 
 module Function_name = Interned.Make(struct
     let initial_size = 1024
@@ -15,10 +17,23 @@ module Spec = struct
   type ('a, 'b) t =
     { name : Function_name.t
     ; allow_cutoff : bool
-    ; input : (module Data with type t = 'a)
-    ; output : (module Data with type t = 'b)
+    ; input : (module Input with type t = 'a)
+    ; output : (module Output with type t = 'b)
+    ; decode : 'a Dune_lang.Decoder.t
     ; witness : 'a witness
+    ; f : 'a -> 'b Fiber.t
+    ; doc : string
     }
+
+  type packed = T : (_, _) t -> packed [@@unboxed]
+
+  let by_name = Function_name.Table.create ~default_value:None
+
+  let register t =
+    Function_name.Table.set by_name ~key:t.name ~data:(Some (T t))
+
+  let find name =
+    Function_name.Table.get by_name name
 end
 
 module Id = Id.Make()
@@ -104,7 +119,7 @@ module Cached_value = struct
 
   let dep_changed (type a) (node : (_, a) Dep_node.t) prev_output curr_output =
     if node.spec.allow_cutoff then
-      let (module Output : Data with type t = a) = node.spec.output in
+      let (module Output : Output with type t = a) = node.spec.output in
       not (Output.equal prev_output curr_output)
     else
       true
@@ -116,7 +131,7 @@ module Cached_value = struct
     else begin
       let rec deps_changed acc = function
         | [] ->
-          Fiber.parallel_map acc ~f:(fun x -> x) >>| List.exists ~f:(fun x -> x)
+          Fiber.parallel_map acc ~f:Fn.id >>| List.exists ~f:Fn.id
         | Last_dep.T (node, prev_output) :: deps ->
           match node.state with
           | Running (run, ivar) ->
@@ -154,7 +169,7 @@ module Cached_value = struct
 end
 
 let ser_input (type a) (node : (a, _) Dep_node.t) =
-  let (module Input : Data with type t = a) = node.spec.input in
+  let (module Input : Input with type t = a) = node.spec.input in
   Input.to_sexp node.input
 
 let dag_node (dep_node : _ Dep_node.t) = Lazy.force dep_node.dag_node
@@ -189,39 +204,47 @@ let global_dep_dag = Dag.create ()
 
 (* fiber context variable keys *)
 let call_stack_key = Fiber.Var.create ()
-let get_call_stack =
-  Fiber.Var.get call_stack_key (* get call stack *)
-  >>| Option.value ~default:[] (* default call stack is empty *)
+let get_call_stack () = Fiber.Var.get call_stack_key |> Option.value ~default:[]
 
 let push_stack_frame frame f =
-  get_call_stack >>= fun stack ->
+  let stack = get_call_stack () in
   Fiber.Var.set call_stack_key (frame :: stack) f
 
-let dump_stack v =
-  get_call_stack
-  >>|
-  (Printf.printf "Memoized function stack:\n";
-   List.iter ~f:(
-     fun st -> Printf.printf "   %s %s\n"
-                 (Stack_frame.name st)
-                 (Stack_frame.input st |> Sexp.to_string)
-   )
-  )
-  >>| (fun _ -> v)
+let dump_stack () =
+  let stack = get_call_stack () in
+  Printf.eprintf "Memoized function stack:\n";
+  List.iter stack ~f:(fun st ->
+    Printf.eprintf "   %s %s\n"
+      (Stack_frame.name st)
+      (Stack_frame.input st |> Sexp.to_string))
 
-module Make(Input : Data) : S with type input := Input.t = struct
+module Visibility = struct
+  type t =
+    | Public (* available via [dune compute] *)
+    | Private (* not available via [dune compute] *)
+end
+module type Visibility = sig
+  val visibility : Visibility.t
+end
+module Public = struct let visibility = Visibility.Public end
+module Private = struct let visibility = Visibility.Private end
+
+module Make_gen
+    (Visibility : Visibility)
+    (Input : Input)
+    (Decoder : Decoder with type t := Input.t)
+  : S with type input := Input.t = struct
   module Table = Hashtbl.Make(Input)
 
   type 'a t =
     { spec  : (Input.t, 'a) Spec.t
     ; cache : (Input.t, 'a) Dep_node.t Table.t
-    ; f     : Input.t -> 'a Fiber.t
     }
 
   type _ Spec.witness += W : Input.t Spec.witness
 
   let add_rev_dep dep_node =
-    get_call_stack >>| function
+    match get_call_stack () with
     | [] -> ()
     | (Dep_node.T rev_dep) :: _ as stack ->
       (* if the caller doesn't already contain this as a dependent *)
@@ -230,10 +253,10 @@ module Make(Input : Data) : S with type input := Input.t = struct
         if Dag.is_child rev_dep dep_node |> not then
           Dag.add global_dep_dag rev_dep dep_node
       with Dag.Cycle cycle ->
-        Cycle_error.E {
+        raise (Cycle_error.E {
           stack = stack;
           cycle = List.map cycle ~f:(fun node -> node.Dag.data)
-        } |> raise
+        })
 
   let get_deps t inp =
     match Table.find t.cache inp with
@@ -242,17 +265,31 @@ module Make(Input : Data) : S with type input := Input.t = struct
       Some (List.map cv.deps ~f:(fun (Last_dep.T (n,_u)) ->
         (Function_name.to_string n.spec.name, ser_input n)))
 
-  let create name ?(allow_cutoff=true) output f =
+  let create name ?(allow_cutoff=true) ~doc output f =
     let name = Function_name.make name in
+    let spec =
+      { Spec.
+        name
+      ; input = (module Input)
+      ; output
+      ; decode = Decoder.decode
+      ; allow_cutoff
+      ; witness = W
+      ; f
+      ; doc
+      }
+    in
+    (match Visibility.visibility with
+     | Public -> Spec.register spec
+     | Private -> ());
     { cache = Table.create 1024
-    ; spec = { name; input = (module Input); output; allow_cutoff; witness = W }
-    ; f
+    ; spec
     }
 
   let compute t inp ivar dep_node =
     (* define the function to update / double check intermediate result *)
     (* set context of computation then run it *)
-    push_stack_frame (T dep_node) (t.f inp) >>= fun res ->
+    push_stack_frame (T dep_node) (fun () -> t.spec.f inp) >>= fun res ->
     (* update the output cache with the correct value *)
     let deps =
       Dag.children (dag_node dep_node)
@@ -295,10 +332,10 @@ module Make(Input : Data) : S with type input := Input.t = struct
       in
       dep_node.dag_node <- lazy dag_node;
       Table.add t.cache inp dep_node;
-      add_rev_dep dag_node >>= fun () ->
+      add_rev_dep dag_node;
       compute t inp ivar dep_node
     | Some dep_node ->
-      add_rev_dep (dag_node dep_node) >>= fun () ->
+      add_rev_dep (dag_node dep_node);
       match dep_node.state with
       | Running (run, fut) ->
         if Run.is_current run then
@@ -311,11 +348,10 @@ module Make(Input : Data) : S with type input := Input.t = struct
         | None -> recompute t inp dep_node
 
   let peek t inp =
-    (* This doesn't add a reverse dependency, which is wrong, see
-       https://github.com/ocaml/dune/issues/1583 for details.  *)
     match Table.find t.cache inp with
     | None -> None
     | Some dep_node ->
+      add_rev_dep (dag_node dep_node);
       match dep_node.state with
       | Running _ -> None
       | Done cv ->
@@ -336,3 +372,51 @@ module Make(Input : Data) : S with type input := Input.t = struct
       dep_node.spec.name = of_.spec.name
   end
 end
+
+module Make(Input : Input)(Decoder : Decoder with type t := Input.t) =
+  Make_gen(Public)(Input)(Decoder)
+
+module Make_hidden(Input : Input) =
+  Make_gen(Private)(Input)(struct
+    let decode : Input.t Dune_lang.Decoder.t =
+      let open Dune_lang.Decoder in
+      loc >>= fun loc ->
+      Exn.fatalf ~loc "<not-implemented>"
+  end)
+
+let get_func name =
+  match
+    let open Option.O in
+    Function_name.get name >>= Spec.find
+  with
+  | None -> Exn.fatalf "@{<error>Error@}: function %s doesn't exist!" name
+  | Some spec -> spec
+
+let call name input =
+  let (Spec.T spec) = get_func name in
+  let (module Output : Output with type t = _) = spec.output in
+  let input = Dune_lang.Decoder.parse spec.decode Univ_map.empty input in
+  spec.f input >>| fun output ->
+  Output.to_sexp output
+
+module Function_info = struct
+  type t =
+    { name : string
+    ; doc  : string
+    }
+
+  let of_spec (Spec.T spec) =
+    { name = Function_name.to_string spec.name
+    ; doc = spec.doc
+    }
+end
+
+let registered_functions () =
+  Function_name.all ()
+  |> List.filter_map ~f:(Function_name.Table.get Spec.by_name)
+  |> List.map ~f:Function_info.of_spec
+  |> List.sort ~compare:(fun a b ->
+    String.compare a.Function_info.name b.Function_info.name)
+
+let function_info name =
+  get_func name |> Function_info.of_spec

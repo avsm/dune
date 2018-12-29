@@ -47,7 +47,10 @@
  (action (chdir %{project_root}
           (progn
            (run %{exe:expect_test.exe} %{t})
-           (diff? %{t} %{t}.corrected)))))
+           (diff? %{t} %{t}.corrected))))
+ (enabled_if (>= %{ocaml_version} "4.07.0"))
+ ;Raise not found under ocaml 4.05.0
+)
 
 (alias
  (name runtest)
@@ -72,6 +75,16 @@
 (alias
  (name runtest)
  (deps (:t path.mlt)
+  (glob_files %{project_root}/src/.dune.objs/*.cmi)
+  (glob_files %{project_root}/src/stdune/.stdune.objs/*.cmi))
+ (action (chdir %{project_root}
+          (progn
+           (run %{exe:expect_test.exe} %{t})
+           (diff? %{t} %{t}.corrected)))))
+
+(alias
+ (name runtest)
+ (deps (:t modules.mlt)
   (glob_files %{project_root}/src/.dune.objs/*.cmi)
   (glob_files %{project_root}/src/stdune/.stdune.objs/*.cmi))
  (action (chdir %{project_root}
@@ -129,7 +142,10 @@
  (action (chdir %{project_root}
           (progn
            (run %{exe:expect_test.exe} %{t})
-           (diff? %{t} %{t}.corrected)))))
+           (diff? %{t} %{t}.corrected))))
+ (enabled_if (>= %{ocaml_version} "4.07.0"))
+ ;different output under ocaml 4.05.0
+)
 (alias
  (name runtest)
  (deps (alias runtestmem)))
@@ -147,3 +163,14 @@
 (alias
  (name runtest)
  (deps (alias runtestdag)))
+
+(alias
+ (name runtest)
+ (deps (:t catapult.mlt)
+  (glob_files %{project_root}/src/.dune.objs/*.cmi)
+  (glob_files %{project_root}/src/stdune/.stdune.objs/*.cmi)
+  (glob_files %{project_root}/src/catapult/.catapult.objs/*.cmi))
+ (action (chdir %{project_root}
+          (progn
+           (run %{exe:expect_test.exe} %{t})
+           (diff? %{t} %{t}.corrected)))))

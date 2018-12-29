@@ -26,7 +26,7 @@ module Gen (P : Install_rules.Params) = struct
       in
       Option.value ~default:lib (String.drop_prefix ~prefix:"-l" lib))
 
-  let build_lib (lib : Library.t) ~expander ~flags ~dir ~obj_dir ~mode
+  let build_lib (lib : Library.t) ~expander ~flags ~dir ~mode
         ~top_sorted_modules ~modules =
     Option.iter (Context.compiler ctx mode) ~f:(fun compiler ->
       let target = Library.archive lib ~dir ~ext:(Mode.compiled_lib_ext mode) in
@@ -44,10 +44,10 @@ module Gen (P : Install_rules.Params) = struct
         if ctx.ccomp_type = "msvc" then
           msvc_hack_cclibs
         else
-          fun x -> x
+          Fn.id
       in
       let artifacts ~ext modules =
-        List.map modules ~f:(Module.obj_file ~obj_dir ~ext)
+        List.map modules ~f:(Module.obj_file ~ext)
       in
       let obj_deps =
         Build.paths (artifacts modules ~ext:(Cm_kind.ext (Mode.cm_kind mode)))
@@ -92,31 +92,34 @@ module Gen (P : Install_rules.Params) = struct
   let alias_module_build_sandbox =
     Ocaml_version.always_reads_alias_cmi ctx.version
 
-  let build_alias_module { Lib_modules.Alias_module.main_module_name
-                         ; alias_module } ~dir
-        ~modules ~cctx ~dynlink ~js_of_ocaml =
+  let build_alias_module ~lib_modules ~dir ~cctx ~dynlink ~js_of_ocaml =
     let vimpl = Compilation_context.vimpl cctx in
+    let alias_module =
+      Option.value_exn (Lib_modules.alias_module lib_modules) in
     let file =
       match Module.impl alias_module with
       | Some f -> f
       | None -> Option.value_exn (Module.intf alias_module)
     in
-    let modules = Vimpl.aliased_modules vimpl modules in
-    SC.add_rule sctx ~dir
-      (Build.return
-         (Module.Name.Map.values
-            (Module.Name.Map.remove modules (Module.name alias_module))
-          |> List.map ~f:(fun (m : Module.t) ->
-            let name = Module.Name.to_string (Module.name m) in
-            sprintf "(** @canonical %s.%s *)\n\
-                     module %s = %s\n"
-              (Module.Name.to_string main_module_name)
-              name
-              name
-              (Module.Name.to_string (Module.real_unit_name m))
-          )
-          |> String.concat ~sep:"\n")
-       >>> Build.write_file_dyn file.path);
+    let alias_file () =
+      let main_module_name =
+        Option.value_exn (Lib_modules.main_module_name lib_modules)
+      in
+      Vimpl.aliased_modules vimpl lib_modules
+      |> Module.Name.Map.values
+      |> List.map ~f:(fun (m : Module.t) ->
+        let name = Module.Name.to_string (Module.name m) in
+        sprintf "(** @canonical %s.%s *)\n\
+                module %s = %s\n"
+          (Module.Name.to_string main_module_name)
+          name
+          name
+          (Module.Name.to_string (Module.real_unit_name m)))
+      |> String.concat ~sep:"\n"
+    in
+    SC.add_rule sctx ~dir (
+      Build.arr alias_file >>> Build.write_file_dyn file.path
+    );
     let cctx = Compilation_context.for_alias_module cctx in
     Module_compilation.build_module cctx alias_module
       ~js_of_ocaml
@@ -124,16 +127,15 @@ module Gen (P : Install_rules.Params) = struct
       ~sandbox:alias_module_build_sandbox
       ~dep_graphs:(Dep_graph.Ml_kind.dummy alias_module)
 
-  let build_wrapped_compat_modules (lib : Library.t)
-        cctx
-        ~js_of_ocaml
-        ~dynlink
-        ~modules
-        ~wrapped_compat =
-    let transition_message =
-      match lib.wrapped with
-      | Simple _ -> "" (* will never be accessed anyway *)
-      | Yes_with_transition r -> r
+  let build_wrapped_compat_modules (lib : Library.t) cctx ~js_of_ocaml
+        ~dynlink ~lib_modules =
+    let wrapped_compat = Lib_modules.wrapped_compat lib_modules in
+    let modules = Lib_modules.modules lib_modules in
+    let wrapped = Lib_modules.wrapped lib_modules in
+    let transition_message = lazy (
+        match (wrapped : Wrapped.t) with
+        | Simple _ -> assert false
+        | Yes_with_transition r -> r)
     in
     Module.Name.Map.iteri wrapped_compat ~f:(fun name m ->
       let main_module_name =
@@ -146,7 +148,7 @@ module Gen (P : Install_rules.Params) = struct
         let hidden_name = sprintf "%s__%s" main_module_name name in
         let real_name = sprintf "%s.%s" main_module_name name in
         sprintf {|[@@@deprecated "%s. Use %s instead."] include %s|}
-          transition_message real_name hidden_name
+          (Lazy.force transition_message) real_name hidden_name
       in
       let source_path = Option.value_exn (Module.file m Impl) in
       Build.return contents
@@ -329,9 +331,9 @@ module Gen (P : Install_rules.Params) = struct
       in
       SC.add_rule sctx build ~dir)
 
-  let setup_file_deps lib ~dir ~obj_dir ~modules =
+  let setup_file_deps lib ~dir ~modules =
     let add_cms ~cm_kind ~init = List.fold_left ~init ~f:(fun acc m ->
-      match Module.cm_file m ~obj_dir cm_kind with
+      match Module.cm_file m cm_kind with
       | None -> acc
       | Some fn -> Path.Set.add acc fn)
     in
@@ -365,8 +367,8 @@ module Gen (P : Install_rules.Params) = struct
             (* These files needs to be alongside stdlib.cma as the
                compiler implicitly adds this module. *)
             List.iter [".cmx"; ".cmo"; ctx.ext_obj] ~f:(fun ext ->
-              let src = Module.obj_file m ~obj_dir ~ext in
-              let dst = Module.obj_file m ~obj_dir:dir ~ext in
+              let src = Module.obj_file m ~ext in
+              let dst = Path.relative dir ((Module.obj_name m) ^ ext) in
               SC.add_rule sctx ~dir (Build.copy ~src ~dst));
             Module.Name.Map.remove modules name
         end
@@ -399,7 +401,7 @@ module Gen (P : Install_rules.Params) = struct
     (let modules = modules @ wrapped_compat in
      Mode.Dict.Set.to_list modes
      |> List.iter ~f:(fun mode ->
-       build_lib lib ~expander ~flags ~dir ~obj_dir ~mode ~top_sorted_modules
+       build_lib lib ~expander ~flags ~dir ~mode ~top_sorted_modules
          ~modules));
     (* Build *.cma.js *)
     if modes.byte then
@@ -408,7 +410,7 @@ module Gen (P : Install_rules.Params) = struct
           Library.archive lib ~dir
             ~ext:(Mode.compiled_lib_ext Mode.Byte) in
         let target =
-          Path.relative obj_dir (Path.basename src)
+          Path.relative obj_dir.public_dir (Path.basename src)
           |> Path.extend_basename ~suffix:".js" in
         Js_of_ocaml_rules.build_cm cctx ~js_of_ocaml ~src ~target);
     if Dynlink_supported.By_the_os.get ctx.natdynlink_supported
@@ -417,8 +419,6 @@ module Gen (P : Install_rules.Params) = struct
 
   let library_rules (lib : Library.t) ~dir_contents ~dir ~expander ~scope
         ~compile_info ~dir_kind =
-    let obj_dir = Utils.library_object_directory ~dir (snd lib.name) in
-    let private_obj_dir = Utils.library_private_obj_dir ~obj_dir in
     let requires = Lib.Compile.requires compile_info in
     let dep_kind =
       if lib.optional then Lib_deps_info.Kind.Optional else Required
@@ -427,11 +427,11 @@ module Gen (P : Install_rules.Params) = struct
     let lib_modules =
       Dir_contents.modules_of_library dir_contents ~name:(Library.best_name lib)
     in
-    Check_rules.add_obj_dir sctx ~dir ~obj_dir;
-    if Lib_modules.has_private_modules lib_modules then
-      Check_rules.add_obj_dir sctx ~dir ~obj_dir:private_obj_dir;
+    let obj_dir = Library.obj_dir ~dir lib in
+    Check_rules.add_obj_dir sctx ~obj_dir;
     let source_modules = Lib_modules.modules lib_modules in
-    let vimpl = Virtual_rules.impl sctx ~lib ~scope ~modules:source_modules in
+    let vimpl =
+      Virtual_rules.impl sctx ~lib ~dir ~scope ~modules:source_modules in
     Option.iter vimpl ~f:(Virtual_rules.setup_copy_rules_for_impl ~sctx ~dir);
     (* Preprocess before adding the alias module as it doesn't need
        preprocessing *)
@@ -460,10 +460,8 @@ module Gen (P : Install_rules.Params) = struct
         ~expander
         ?vimpl
         ~scope
-        ~dir
         ~dir_kind
         ~obj_dir
-        ~private_obj_dir
         ~modules
         ?alias_module
         ?lib_interface_module:(Lib_modules.lib_interface_module lib_modules)
@@ -480,9 +478,7 @@ module Gen (P : Install_rules.Params) = struct
     in
     let js_of_ocaml = lib.buildable.js_of_ocaml in
 
-    let wrapped_compat = Lib_modules.wrapped_compat lib_modules in
-    build_wrapped_compat_modules lib cctx ~dynlink ~js_of_ocaml
-      ~modules ~wrapped_compat;
+    build_wrapped_compat_modules lib cctx ~dynlink ~js_of_ocaml ~lib_modules;
 
     let (vlib_dep_graphs, dep_graphs) =
       let dep_graphs = Ocamldep.rules cctx in
@@ -498,25 +494,27 @@ module Gen (P : Install_rules.Params) = struct
 
     Module_compilation.build_modules cctx ~js_of_ocaml ~dynlink ~dep_graphs;
 
-    if Option.is_none lib.stdlib then
-      Option.iter (Lib_modules.alias lib_modules)
-        ~f:(build_alias_module ~dir ~modules:source_modules ~cctx ~dynlink
-              ~js_of_ocaml);
+    if Option.is_none lib.stdlib
+    && Lib_modules.needs_alias_module lib_modules then
+      build_alias_module ~dir ~lib_modules ~cctx ~dynlink ~js_of_ocaml;
 
     let expander = Super_context.expander sctx ~dir in
 
     let vlib_stubs_o_files = Vimpl.vlib_stubs_o_files vimpl in
     if Library.has_stubs lib || not (List.is_empty vlib_stubs_o_files) then
-      build_stubs lib ~dir ~expander ~requires ~dir_contents ~vlib_stubs_o_files;
+      build_stubs lib ~dir ~expander ~requires ~dir_contents
+        ~vlib_stubs_o_files;
 
-    setup_file_deps lib ~dir ~obj_dir
+    setup_file_deps lib ~dir
       ~modules:(Lib_modules.have_artifacts lib_modules
                 |> Module.Name.Map.values
                 |> Vimpl.for_file_deps vimpl);
 
-    if not (Library.is_virtual lib) then
+    if not (Library.is_virtual lib) then (
+      let wrapped_compat = Lib_modules.wrapped_compat lib_modules in
       setup_build_archives lib ~wrapped_compat ~cctx ~dep_graphs
-        ~vlib_dep_graphs ~expander;
+        ~vlib_dep_graphs ~expander
+    );
 
     Odoc.setup_library_odoc_rules lib ~requires ~modules ~dep_graphs ~scope;
 
@@ -538,13 +536,16 @@ module Gen (P : Install_rules.Params) = struct
       ; compile_info
       };
 
+    let objs_dirs = Path.Set.of_list (Obj_dir.all_objs_dir obj_dir) in
+
     (cctx,
      Merlin.make ()
        ~requires:(Lib.Compile.requires compile_info)
        ~flags
        ~preprocess:(Buildable.single_preprocess lib.buildable)
        ~libname:(snd lib.name)
-       ~objs_dirs:(Path.Set.singleton obj_dir))
+       ~objs_dirs
+    )
 
   let rules (lib : Library.t) ~dir_contents ~dir ~expander ~scope
         ~dir_kind : Compilation_context.t * Merlin.t =

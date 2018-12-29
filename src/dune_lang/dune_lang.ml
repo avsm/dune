@@ -208,7 +208,8 @@ module Parser = struct
         | Many -> sexps
         | Many_as_one ->
           match sexps with
-          | [] -> List (Loc.in_file lexbuf.lex_curr_p.pos_fname, [])
+          | [] -> List (Loc.in_file
+                          (Path.of_string lexbuf.lex_curr_p.pos_fname), [])
           | x :: l ->
             let last = List.fold_left l ~init:x ~f:(fun _ x -> x) in
             let loc = { (Ast.loc x) with stop = (Ast.loc last).stop } in
@@ -303,21 +304,29 @@ module Encoder = struct
     | None -> Absent
     | Some v -> Normal (name, f v)
 
+  let field_b name v =
+    if v then
+      Inlined_list (name, [])
+    else
+      Absent
+
   let field_l name f l =
     match l with
     | [] -> Absent
     | _ -> Inlined_list (name, List.map l ~f)
 
-  let record_fields (syntax : Syntax.t) (l : field list) =
+  let field_i name f x =
+    match f x with
+    | [] -> Absent
+    | l -> Inlined_list (name, l)
+
+  let record_fields (l : field list) =
     List.filter_map l ~f:(function
       | Absent -> None
       | Normal (name, v) ->
         Some (List [Atom (Atom.of_string name); v])
       | Inlined_list (name, l) ->
-        Some (List (Atom (Atom.of_string name) ::
-                    match syntax with
-                    | Dune -> l
-                    | Jbuild -> [List l])))
+        Some (List (Atom (Atom.of_string name) :: l)))
 
   let unknown _ = unsafe_atom_of_string "<unknown>"
 end
@@ -668,7 +677,7 @@ module Decoder = struct
     let x, state2 = t ctx state1 in
     ((loc_between_states ctx state1 state2, x), state2)
 
-  let raw = next (fun x -> x)
+  let raw = next Fn.id
 
   let unit =
     next

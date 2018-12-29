@@ -165,12 +165,10 @@ module Mode_conf : sig
 end
 
 module Library : sig
-  module Wrapped : sig
-    type t =
-      | Simple of bool
-      | Yes_with_transition of string
-
-    val to_bool : t -> bool
+  module Inherited : sig
+    type 'a t =
+      | This of 'a
+      | From of (Loc.t * Lib_name.t)
   end
 
   module Stdlib : sig
@@ -198,7 +196,7 @@ module Library : sig
     ; install_c_headers        : string list
     ; ppx_runtime_libraries    : (Loc.t * Lib_name.t) list
     ; modes                    : Mode_conf.Set.t
-    ; kind                     : Dune_package.Lib.Kind.t
+    ; kind                     : Lib_kind.t
     ; c_flags                  : Ordered_set_lang.Unexpanded.t
     ; c_names                  : (Loc.t * string) list
     ; cxx_flags                : Ordered_set_lang.Unexpanded.t
@@ -207,7 +205,7 @@ module Library : sig
     ; c_library_flags          : Ordered_set_lang.Unexpanded.t
     ; self_build_stubs_archive : string option
     ; virtual_deps             : (Loc.t * Lib_name.t) list
-    ; wrapped                  : Wrapped.t
+    ; wrapped                  : Wrapped.t Inherited.t
     ; optional                 : bool
     ; buildable                : Buildable.t
     ; dynlink                  : Dynlink_supported.t
@@ -230,12 +228,12 @@ module Library : sig
   val best_name : t -> Lib_name.t
   val is_virtual : t -> bool
   val is_impl : t -> bool
+  val obj_dir : dir:Path.t -> t -> Obj_dir.t
 
   module Main_module_name : sig
-    type t =
-      | This of Module.Name.t option
-      | Inherited_from of (Loc.t * Lib_name.t)
+    type t = Module.Name.t option Inherited.t
   end
+
   val main_module_name : t -> Main_module_name.t
 
   (** Returns [true] is a special module, i.e. one whose compilation

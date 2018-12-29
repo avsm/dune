@@ -1,6 +1,8 @@
 unreleased
 ----------
 
+- Fix merlin handling of private module visibility (#1653 @bobot)
+
 - unstable-fmt: use boxes to wrap some lists (#1608, fix #1153, @emillon,
   thanks to @rgrinberg)
 
@@ -32,6 +34,30 @@ unreleased
 
 - Get the correct environment node for multi project workspaces (#1648,
   @rgrinberg)
+
+- Add `dune compute` to call internal memoized functions (#1528,
+  @rudihorn, @diml)
+
+- Add `--trace-file` option to trace dune internals (#1639, fix #1180, @emillon)
+
+- Add `--no-print-directory` (borrowed from GNU make) to suppress
+  `Entering directory` messages. (#1668, @dra27)
+
+- Remove `--stats` and track fd usage in `--trace-file` (#1667, @emillon)
+
+- Add virtual libraries feature and enable it by default (#1430 fixes #921,
+  @rgrinberg)
+
+- Fix handling of Control+C in watch mode (#1678, fixes #1671, @diml)
+
+- Look for jsoo runtime in the same dir as the `js_of_ocaml` binary
+  when the ocamlfind package is not available (#1467, @nobj)
+
+- Make the `seq` package available for OCaml >= 4.07 (#1714, @rgrinberg)
+
+- Add locations to error messages where a rule fails to generate targets and
+  rules that require files outside the build/source directory. (#1708, fixes
+  #848, @rgrinberg)
 
 1.6.2 (05/12/2018)
 ------------------

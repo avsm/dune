@@ -16,23 +16,23 @@ val name : t -> Lib_name.t
 val src_dir : t -> Path.t
 
 (** Directory where the object files for the library are located. *)
-val obj_dir : t -> Path.t
-
-val private_obj_dir : t -> Path.t option
+val obj_dir : t -> Obj_dir.t
 
 (** Same as [Path.is_managed (obj_dir t)] *)
 val is_local : t -> bool
 
 val synopsis     : t -> string option
-val kind         : t -> Dune_package.Lib.Kind.t
+val kind         : t -> Lib_kind.t
 val archives     : t -> Path.t list Mode.Dict.t
 val plugins      : t -> Path.t list Mode.Dict.t
 val jsoo_runtime : t -> Path.t list
 val jsoo_archive : t -> Path.t option
+val modes        : t -> Mode.Dict.Set.t
 
 val foreign_objects : t -> Path.t list
 
 val main_module_name : t -> Module.Name.t option Or_exn.t
+val wrapped : t -> Wrapped.t option Or_exn.t
 
 val virtual_ : t -> Lib_info.Virtual.t option
 
@@ -79,7 +79,7 @@ end
 module Lib_and_module : sig
   type nonrec t =
     | Lib of t
-    | Module of Module.t * Path.t (** obj_dir *)
+    | Module of Module.t
 
   val link_flags : t list -> mode:Mode.t -> stdlib_dir:Path.t -> _ Arg_spec.t
 
@@ -220,6 +220,7 @@ module DB : sig
   (** Create a database from a list of library stanzas *)
   val create_from_library_stanzas
     :  ?parent:t
+    -> has_native:bool
     -> ext_lib:string
     -> ext_obj:string
     -> (Path.t * Dune_file.Library.t) list
@@ -314,5 +315,6 @@ end
 
 val to_dune_lib
   :  t
+  -> lib_modules:Lib_modules.t
   -> dir:Path.t
   -> (Syntax.Version.t * Dune_lang.t list) Dune_package.Lib.t

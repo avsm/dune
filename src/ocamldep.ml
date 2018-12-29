@@ -102,7 +102,7 @@ let deps_of cctx ~ml_kind unit =
     | Some file ->
       let file_in_obj_dir ~suffix file =
         let base = Path.basename file in
-        Path.relative (Compilation_context.obj_dir cctx) (base ^ suffix)
+        Path.relative (Compilation_context.obj_dir cctx).public_dir (base ^ suffix)
       in
       let all_deps_path file = file_in_obj_dir file ~suffix:".all-deps" in
       let context = SC.context sctx in
@@ -139,7 +139,7 @@ let deps_of cctx ~ml_kind unit =
           let module_file_ =
             match file_path m with
             | Some v -> Some v
-            | None -> Option.bind ~f:file_path(Vimpl.find_module vimpl m)
+            | None -> Option.bind ~f:file_path (Vimpl.find_module vimpl m)
           in
           Option.map ~f:all_deps_path module_file_
         in

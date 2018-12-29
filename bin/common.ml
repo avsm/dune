@@ -1,5 +1,13 @@
 open Stdune
-open Dune
+
+module Config = Dune.Config
+module Colors = Dune.Colors
+module Clflags = Dune.Clflags
+module Package = Dune.Package
+
+module Term = Cmdliner.Term
+module Manpage = Cmdliner.Manpage
+module Let_syntax = Term
 
 type t =
   { debug_dep_path        : bool
@@ -9,7 +17,7 @@ type t =
   ; workspace_file        : Arg.Path.t option
   ; root                  : string
   ; target_prefix         : string
-  ; only_packages         : Package.Name.Set.t option
+  ; only_packages         : Dune.Package.Name.Set.t option
   ; capture_outputs       : bool
   ; x                     : string option
   ; diff_command          : string option
@@ -17,13 +25,14 @@ type t =
   ; force                 : bool
   ; ignore_promoted_rules : bool
   ; build_dir             : string
+  ; no_print_directory    : bool
   ; (* Original arguments for the external-lib-deps hint *)
     orig_args             : string list
-  ; config                : Config.t
+  ; config                : Dune.Config.t
   ; default_target        : string
   (* For build & runtest only *)
   ; watch : bool
-  ; stats : bool
+  ; stats_trace_file : string option
   }
 
 let prefix_target common s = common.target_prefix ^ s
@@ -43,13 +52,14 @@ let set_common_other c ~targets =
   Clflags.auto_promote := c.auto_promote;
   Clflags.force := c.force;
   Clflags.watch := c.watch;
+  Clflags.no_print_directory := c.no_print_directory;
   Clflags.external_lib_deps_hint :=
     List.concat
       [ ["dune"; "external-lib-deps"; "--missing"]
       ; c.orig_args
       ; targets
       ];
-  if c.stats then Stats.enable ()
+  Option.iter ~f:Dune.Stats.enable c.stats_trace_file
 
 let set_common c ~targets =
   set_dirs c;
@@ -82,23 +92,15 @@ let term =
               "Cannot use %s and %s simultaneously"
               a b)
   in
-  let module Let_syntax = Cmdliner.Term in
-  let module Term = Cmdliner.Term in
-  let module Manpage = Cmdliner.Manpage in
-  let dump_opt name value =
-    match value with
-    | None -> []
-    | Some s -> [name; s]
-  in
   let docs = copts_sect in
   let%map concurrency =
     let arg =
       Arg.conv
         ((fun s ->
-           Result.map_error (Config.Concurrency.of_string s)
+           Result.map_error (Dune.Config.Concurrency.of_string s)
              ~f:(fun s -> `Msg s)),
          fun pp x ->
-           Format.pp_print_string pp (Config.Concurrency.to_string x))
+           Format.pp_print_string pp (Dune.Config.Concurrency.to_string x))
     in
     Arg.(value
          & opt (some arg) None
@@ -185,8 +187,7 @@ let term =
       ignore_promoted_rules,
       config_file,
       profile,
-      default_target,
-      orig =
+      default_target =
     let default_target_default =
       match Which_program.t with
       | Dune     -> "@@default"
@@ -305,8 +306,7 @@ let term =
            true,
            No_config,
            Some "release",
-           "@install",
-           ["-p"; pkgs]
+           "@install"
           )
     | None, _, _, _, _, _, _ ->
       `Ok (root,
@@ -314,21 +314,7 @@ let term =
            ignore_promoted_rules,
            config_file,
            profile,
-           Option.value default_target ~default:default_target_default,
-           List.concat
-             [ dump_opt "--root" root
-             ; dump_opt "--only-packages" only_packages
-             ; dump_opt "--profile" profile
-             ; dump_opt "--default-target" default_target
-             ; if ignore_promoted_rules then
-                 ["--ignore-promoted-rules"]
-               else
-                 []
-             ; (match config_file with
-                | This fn   -> ["--config-file"; Path.to_string fn]
-                | No_config -> ["--no-config"]
-                | Default   -> [])
-             ]
+           Option.value default_target ~default:default_target_default
           )
   and x =
     Arg.(value
@@ -348,12 +334,17 @@ let term =
          & info ["diff-command"] ~docs
              ~doc:"Shell command to use to diff files.
                    Use - to disable printing the diff.")
-  and stats =
+  and stats_trace_file =
+    Arg.(value
+         & opt (some string) None
+         & info ["trace-file"] ~docs ~docv:"FILE"
+             ~doc:"Output trace data in catapult format
+                   (compatible with chrome://tracing)")
+  and no_print_directory =
     Arg.(value
          & flag
-         & info ["stats"] ~docs
-             ~doc:{|Record and print statistics about Dune resource usage.
-                   |})
+         & info ["no-print-directory"] ~docs
+             ~doc:"Suppress \"Entering directory\" messages")
   in
   let build_dir = Option.value ~default:"_build" build_dir in
   let root, to_cwd =
@@ -364,12 +355,6 @@ let term =
         (".", [])
       else
         Util.find_root ()
-  in
-  let orig_args =
-    List.concat
-      [ dump_opt "--workspace" (Option.map ~f:Arg.Path.arg workspace_file)
-      ; orig
-      ]
   in
   let config =
     match config_file with
@@ -398,7 +383,7 @@ let term =
   ; capture_outputs = not no_buffer
   ; workspace_file
   ; root
-  ; orig_args
+  ; orig_args = []
   ; target_prefix = String.concat ~sep:"" (List.map to_cwd ~f:(sprintf "%s/"))
   ; diff_command
   ; auto_promote
@@ -411,7 +396,17 @@ let term =
   ; x
   ; config
   ; build_dir
+  ; no_print_directory
   ; default_target
   ; watch
-  ; stats
+  ; stats_trace_file
   }
+
+let term =
+  let%map t, orig_args = Term.with_used_args term in
+  { t with orig_args }
+
+let context_arg ~doc =
+  Arg.(value
+       & opt string "default"
+       & info ["context"] ~docv:"CONTEXT" ~doc)

@@ -13,7 +13,7 @@ val mlds : t -> Path.t list
 
 val installs
   : t
-  -> string Dune_file.Install_conf.t Dir_with_dune.t list
+  -> (Loc.t * string) Dune_file.Install_conf.t Dir_with_dune.t list
 
 val odig_files : t -> Path.t list
 
@@ -32,3 +32,7 @@ val install_paths : t -> Install.Section.Paths.t
 val libs : t -> Lib.Set.t
 
 val package : t -> Package.t
+
+val virtual_lib : t -> Lib.t option
+
+val meta_template : t -> Path.t

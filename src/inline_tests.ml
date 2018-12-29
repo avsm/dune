@@ -87,9 +87,9 @@ module Backend = struct
       let lib x = Lib_name.encode (Lib.name x) in
       let f x = Lib_name.encode (Lib.name x.lib) in
       ((1, 0),
-       record_fields Dune @@
+       record_fields @@
          [ field_l "runner_libraries" lib (Result.ok_exn t.runner_libraries)
-         ; field "flags" Ordered_set_lang.Unexpanded.encode_and_upgrade
+         ; field_i "flags" Ordered_set_lang.Unexpanded.encode_and_upgrade
              t.info.flags
          ; field_o "generate_runner" Action_dune_lang.encode_and_upgrade
              (Option.map t.info.generate_runner ~f:snd)
@@ -164,10 +164,13 @@ include Sub_system.Register_end_point(
 
       let loc = lib.buildable.loc in
 
-      let inline_test_dir =
-        Path.relative dir (sprintf ".%s.inline-tests"
-                             (Lib_name.Local.to_string (snd lib.name)))
+      let inline_test_name =
+        sprintf "%s.inline-tests" (Lib_name.Local.to_string (snd lib.name))
       in
+
+      let inline_test_dir = Path.relative dir ("."^inline_test_name) in
+
+      let obj_dir = Obj_dir.make_exe ~dir:inline_test_dir inline_test_name in
 
       let name = "run" in
       let main_module_filename = name ^ ".ml" in
@@ -178,8 +181,10 @@ include Sub_system.Register_end_point(
              ~impl:{ path   = Path.relative inline_test_dir main_module_filename
                    ; syntax = OCaml
                    }
+             ~kind:Impl
              ~visibility:Public
-             ~obj_name:name)
+             ~obj_name:name
+             ~obj_dir)
       in
 
       let bindings =
@@ -223,7 +228,6 @@ include Sub_system.Register_end_point(
           (List.filter_map backends ~f:(fun (backend : Backend.t) ->
              Option.map backend.info.generate_runner ~f:(fun (loc, action) ->
                SC.Action.run sctx action ~loc
-                 ~dir
                  ~expander
                  ~dep_kind:Required
                  ~targets:Alias
@@ -239,7 +243,7 @@ include Sub_system.Register_end_point(
           ~super_context:sctx
           ~expander
           ~scope
-          ~dir:inline_test_dir
+          ~obj_dir
           ~modules
           ~opaque:false
           ~requires:runner_libs
