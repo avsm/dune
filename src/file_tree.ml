@@ -134,7 +134,7 @@ let is_temp_file fn =
   || String.is_suffix fn ~suffix:".swp"
   || String.is_suffix fn ~suffix:"~"
 
-let load ?(extra_ignored_subtrees=Path.Set.empty) path =
+let load ?(warn_when_seeing_jbuild_file=true) path =
   let rec walk path ~dirs_visited ~project ~data_only : Dir.t =
     let contents = lazy (
       let files, unfiltered_sub_dirs =
@@ -177,10 +177,18 @@ let load ?(extra_ignored_subtrees=Path.Set.empty) path =
             match List.filter ["dune"; "jbuild"] ~f:(String.Set.mem files) with
             | [] -> (None, Sub_dirs.default)
             | [fn] ->
+              let file = Path.relative path fn in
               if fn = "dune" then
-                Dune_project.ensure_project_file_exists project;
+                ignore (Dune_project.ensure_project_file_exists project
+                        : Dune_project.created_or_already_exist)
+              else if warn_when_seeing_jbuild_file then
+                Errors.warn (Loc.in_file file)
+                  "jbuild files are deprecated, please convert this file to \
+                   a dune file instead.\n\
+                   Note: You can use \"dune upgrade\" to convert your \
+                   project to dune.";
               let dune_file, sub_dirs =
-                Dune_file.load (Path.relative path fn)
+                Dune_file.load file
                   ~project
                   ~kind:(Option.value_exn (Dune_lang.Syntax.of_basename fn))
               in
@@ -206,7 +214,7 @@ let load ?(extra_ignored_subtrees=Path.Set.empty) path =
         List.fold_left unfiltered_sub_dirs ~init:String.Map.empty
           ~f:(fun acc (fn, path, file) ->
             let status =
-              if Path.Set.mem extra_ignored_subtrees path then
+              if Bootstrap.data_only_path path then
                 Sub_dirs.Status.Ignored
               else
                 Sub_dirs.status sub_dirs ~dir:fn

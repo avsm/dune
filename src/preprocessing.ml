@@ -191,10 +191,10 @@ module Driver = struct
       let open Dune_lang.Encoder in
       let f x = Lib_name.encode (Lib.name (Lazy.force x.lib)) in
       ((1, 0),
-       record_fields Dune @@
-         [ field "flags" Ordered_set_lang.Unexpanded.encode_and_upgrade
+       record_fields @@
+         [ field_i "flags" Ordered_set_lang.Unexpanded.encode_and_upgrade
              t.info.flags
-         ; field "lint_flags" Ordered_set_lang.Unexpanded.encode_and_upgrade
+         ; field_i "lint_flags" Ordered_set_lang.Unexpanded.encode_and_upgrade
              t.info.lint_flags
          ; field "main" string t.info.main
          ; field_l "replaces" f (Result.ok_exn t.replaces)
@@ -212,7 +212,7 @@ module Driver = struct
     match loc with
     | User_file (loc, _) -> Error (Errors.exnf loc "%a" Fmt.text msg)
     | Dot_ppx (path, pps) ->
-      Error (Errors.exnf (Loc.in_file (Path.to_string path)) "%a" Fmt.text
+      Error (Errors.exnf (Loc.in_file path) "%a" Fmt.text
                (sprintf
                   "Failed to create on-demand ppx rewriter for %s; %s"
                   (String.enumerate_and (List.map pps ~f:Lib_name.to_string))
@@ -355,7 +355,7 @@ let build_ppx_driver sctx ~dep_kind ~target ~dir_kind ~pps ~pp_names =
       match pps with
       | Error _ ->
         let driver, driver_name, pp_names =
-          Jbuild_driver.analyse_pps pp_names ~get_name:(fun x -> x)
+          Jbuild_driver.analyse_pps pp_names ~get_name:Fn.id
         in
         (Some driver, pps, driver_name :: pp_names)
       | Ok pps ->
@@ -495,7 +495,6 @@ let get_ppx_driver sctx ~loc ~scope ~dir_kind pps =
   >>| fun driver ->
   (ppx_driver_exe (SC.host sctx) libs ~dir_kind, driver)
 
-let target_var         = String_with_vars.virt_var __POS__ "targets"
 let workspace_root_var = String_with_vars.virt_var __POS__ "workspace_root"
 
 let cookie_library_name lib_name =
@@ -531,8 +530,7 @@ let setup_reason_rules sctx (m : Module.t) =
           | ".rei" -> ".re.mli"
           | _     ->
             Errors.fail
-              (Loc.in_file
-                 (Path.to_string (Path.drop_build_context_exn f.path)))
+              (Loc.in_file (Path.drop_build_context_exn f.path))
               "Unknown file extension for reason source file: %S"
               ext
         in
@@ -575,7 +573,6 @@ let lint_module sctx ~dir ~expander ~dep_kind ~lint ~lib_name ~scope ~dir_kind =
                   >>> SC.Action.run sctx
                         action
                         ~loc
-                        ~dir
                         ~expander
                         ~dep_kind
                         ~targets:(Static [])
@@ -655,17 +652,16 @@ let make sctx ~dir ~expander ~dep_kind ~lint ~preprocess
                 >>^ (fun _ -> Bindings.empty)
                 >>>
                 SC.Action.run sctx
-                  (Redirect
-                     (Stdout,
-                      target_var,
-                      Chdir (workspace_root_var,
-                             action)))
+                  (Chdir (workspace_root_var, action))
                   ~loc
-                  ~dir
                   ~expander
                   ~dep_kind
-                  ~targets:(Static [dst])
-                  ~targets_dir:(Path.parent_exn dst)))
+                  ~targets:(Forbidden "preprocessing actions")
+                  ~targets_dir:(Path.parent_exn dst)
+                >>>
+                Build.action_dyn () ~targets:[dst]
+                >>^ fun action ->
+                Action.with_stdout_to dst action))
            |> setup_reason_rules sctx in
          if lint then lint_module ~ast ~source:m;
          ast)
@@ -722,11 +718,12 @@ let make sctx ~dir ~expander ~dep_kind ~lint ~preprocess
              >>>
              Expander.expand_and_eval_set expander driver.info.as_ppx_flags
                ~standard:(Build.return [])
-             >>^ fun flags ->
+             >>^ fun driver_flags ->
              let command =
                List.map
                  (List.concat
                     [ [Path.reach exe ~from:(SC.context sctx).build_dir]
+                    ; driver_flags
                     ; flags
                     ; cookie_library_name lib_name
                     ])

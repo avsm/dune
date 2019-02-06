@@ -146,7 +146,7 @@ module Package = struct
     ; vars      : Vars.t
     }
 
-  let loc  t = Loc.in_dir (Path.to_string t.meta_file)
+  let loc  t = Loc.in_dir t.meta_file
   let name t = t.name
 
   let preds = Ps.of_list [P.ppx_driver; P.mt; P.mt_posix]
@@ -187,25 +187,29 @@ module Package = struct
       | None -> Sub_system_name.Map.empty
       | Some p -> Installed_dune_file.load p
     in
+    let archives = archives t in
+    let modes : Mode.Dict.Set.t =
+      Mode.Dict.map ~f:(fun x -> not (List.is_empty x)) archives in
     Dune_package.Lib.make
+      ~orig_src_dir:None
       ~loc
       ~kind:Normal
       ~name:(name t)
       ~synopsis:(description t)
-      ~archives:(archives t)
+      ~archives
       ~plugins:(plugins t)
       ~foreign_objects:[]
       ~foreign_archives:(Mode.Dict.make_both [])
       ~jsoo_runtime:(jsoo_runtime t)
-      (* Technically not accurate, but it doesn't matter as we can't findlib
-         modules don't work with virtual libraries *)
-      ~main_module_name:None
       ~sub_systems
       ~requires:(List.map ~f:add_loc (requires t))
       ~ppx_runtime_deps:(List.map ~f:add_loc (ppx_runtime_deps t))
-      ~virtual_:None
+      ~virtual_:false
       ~implements:None
+      ~modules:None
+      ~main_module_name:None (* XXX remove *)
       ~version:(version t)
+      ~modes
       ~dir:t.dir
 end
 
@@ -351,20 +355,26 @@ let find_and_acknowledge_meta t ~fq_name =
       let sub_dir = Path.relative dir (Lib_name.to_string root_name) in
       let dune = Path.relative sub_dir "dune-package" in
       let meta_file = Path.relative sub_dir "META" in
-      if Path.exists dune then
-        Some (Dune (Dune_package.load dune))
-      else if Path.exists meta_file then
-        let meta = Meta.load meta_file ~name:(Some root_name) in
-        Some (Findlib {dir = sub_dir; meta; meta_file})
-      else
-        (* Alternative layout *)
-        let meta_file =
-          Path.relative dir ("META." ^ (Lib_name.to_string root_name)) in
+      match
+        (if Path.exists dune then
+           Dune_package.Or_meta.load dune
+         else
+           Dune_package.Or_meta.Use_meta)
+      with
+      | Dune_package p -> Some (Dune p)
+      | Use_meta ->
         if Path.exists meta_file then
           let meta = Meta.load meta_file ~name:(Some root_name) in
-          Some (Findlib {dir; meta_file; meta})
+          Some (Findlib {dir = sub_dir; meta; meta_file})
         else
-          loop dirs
+          (* Alternative layout *)
+          let meta_file =
+            Path.relative dir ("META." ^ (Lib_name.to_string root_name)) in
+          if Path.exists meta_file then
+            let meta = Meta.load meta_file ~name:(Some root_name) in
+            Some (Findlib {dir; meta_file; meta})
+          else
+            loop dirs
   in
   match loop t.paths with
   | None ->

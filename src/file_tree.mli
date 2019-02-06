@@ -57,12 +57,12 @@ module Dir : sig
 end
 
 (** A [t] value represent a view of the source tree. It is lazily
-    constructed by scanning the file system and interpreting [.dune-fs]
-    files, as well as [jbuild-ignore] files for backward
+    constructed by scanning the file system and interpreting a few
+    stanzas in [dune] files as well as [jbuild-ignore] files for backward
     compatibility. *)
 type t
 
-val load : ?extra_ignored_subtrees:Path.Set.t -> Path.t -> t
+val load : ?warn_when_seeing_jbuild_file:bool -> Path.t -> t
 
 (** Passing [~traverse_ignored_dirs:true] to this functions causes the
     whole source tree to be deeply scanned, including ignored
@@ -90,3 +90,6 @@ val dir_exists : t -> Path.t -> bool
 val file_exists : t -> Path.t -> string -> bool
 
 val files_recursively_in : t -> ?prefix_with:Path.t -> Path.t -> Path.Set.t
+
+(** Load a [jbuild-ignore] file *)
+val load_jbuild_ignore : Path.t -> String.Set.t

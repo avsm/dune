@@ -14,21 +14,19 @@ val go
   :  ?log:Log.t
   -> ?config:Config.t
   -> ?gen_status_line:(unit -> status_line_config)
-  -> 'a Fiber.t
+  -> (unit -> 'a Fiber.t)
   -> 'a
 
 (** Runs [once] in a loop, executing [finally] after every iteration,
     even if Fiber.Never was encountered.
 
     If any source files change in the middle of iteration, it gets
-    canceled, and [canceled] is called instead of [finally].
-*)
+    canceled. *)
 val poll
   :  ?log:Log.t
   -> ?config:Config.t
   -> once:(unit -> unit Fiber.t)
   -> finally:(unit -> unit)
-  -> canceled:(unit -> unit)
   -> unit
   -> 'a
 
@@ -36,9 +34,9 @@ val poll
 val wait_for_process : int -> Unix.process_status Fiber.t
 
 (** Set the status line generator for the current scheduler *)
-val set_status_line_generator : (unit -> status_line_config) -> unit Fiber.t
+val set_status_line_generator : (unit -> status_line_config) -> unit
 
-val set_concurrency : int -> unit Fiber.t
+val set_concurrency : int -> unit
 
 (** Make the scheduler ignore next change to a certain file in watch mode.
 

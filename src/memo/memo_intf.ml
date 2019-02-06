@@ -21,14 +21,14 @@ module type S = sig
   (** Type of memoized functions *)
   type 'a t
 
-  (** [create name ?lifetime ouput_spec f] creates a memoized version
+  (** [create name ?allow_cutoff ouput_spec f] creates a memoized version
       of [f]. The result of [f] for a given input is cached, so that
       the second time [exec t x] is called, the previous result is
       re-used if possible.
 
       [exec t x] tracks what calls to other memoized function [f x]
       performs. When the result of such dependent call changes, [exec t
-      x] will automatically recomputes [f x].
+      x] will automatically recompute [f x].
 
       Running the computation may raise [Memo.Cycle_error.E] if a cycle is
       detected.  *)
@@ -40,6 +40,20 @@ module type S = sig
     -> (input -> 'a Fiber.t)
     -> 'a t
 
+  (** Same as [create] except that the implementation is defined at a
+      latter point of the program. This is useful for creating mutually
+      recursive memoized functions.  *)
+  val fcreate
+    :  string
+    -> ?allow_cutoff:bool
+    -> doc:string
+    -> (module Output with type t = 'a)
+    -> 'a t
+
+  (** Set the implementation of a memoized function created with
+      [fcreate] *)
+  val set_impl : 'a t -> (input -> 'a Fiber.t) -> unit
+
   (** Execute a memoized function *)
   val exec : 'a t -> input -> 'a Fiber.t
 
@@ -48,7 +62,7 @@ module type S = sig
   val peek_exn : 'a t -> input -> 'a
 
   (** After running a memoization function with a given name and
-      input, it is possibly to query which dependencies that function
+      input, it is possible to query which dependencies that function
       used during execution by calling [get_deps] with the name and
       input used during execution. *)
   val get_deps : _ t -> input -> (string * Sexp.t) list option

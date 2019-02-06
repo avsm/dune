@@ -39,8 +39,43 @@ and impls acc = parse
 {
 let parse s = ocamlobjinfo empty (Lexing.from_string s)
 
-let load ~ocamlobjinfo:bin ~unit =
-  ["-no-approx"; "-no-code"; Path.to_absolute_filename unit]
-  |> Process.run_capture ~env:Env.empty Process.Strict bin
-  |> Fiber.map ~f:(fun s -> ocamlobjinfo empty (Lexing.from_string s))
+let rules ~dir ~(ctx : Context.t) ~unit =
+  let open Build.O in
+  let output =
+    Path.relative dir (Path.basename unit)
+    |> Path.extend_basename ~suffix:".ooi-deps"
+  in
+  let bin =
+    match ctx.ocamlobjinfo with
+    | None ->
+      Error (
+        { Action.Prog.Not_found.
+          context = Context.name ctx
+        ; program = "ocamlobjinfo"
+        ; hint = None
+        ; loc = None
+        })
+    | Some bin -> Ok bin
+  in
+  let no_approx =
+    if Ocaml_version.ooi_supports_no_approx ctx.version then
+      [Arg_spec.A "-no-approx"]
+    else
+      []
+  in
+  let no_code =
+    if Ocaml_version.ooi_supports_no_code ctx.version then
+      [Arg_spec.A "-no-code"]
+    else
+      []
+  in
+  ( Build.run ~dir bin
+      (List.concat
+         [ no_approx
+         ; no_code
+         ; [ Dep unit ]
+         ])
+      ~stdout_to:output
+  , Build.contents output >>^ parse
+  )
 }

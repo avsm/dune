@@ -116,16 +116,16 @@ module Run (P : PARAMS) : sig end = struct
      that are neither dependencies nor targets.
      [Hidden_targets] is for targets that are *not* command line arguments.  *)
 
-  type args =
-    string list Arg_spec.t list
+  type 'a args =
+    (string list, 'a) Arg_spec.t list
 
   (* [menhir args] generates a Menhir command line (a build action). *)
 
-  let menhir (args : args) : (string list, Action.t) Build.t =
+  let menhir (args : 'a args) : (string list, Action.t) Build.t =
     Build.run ~dir menhir_binary args
 
-  let rule : (unit, Action.t) Build.t -> unit =
-    SC.add_rule sctx ~dir ~mode:stanza.mode ~loc:stanza.loc
+  let rule ?(mode=stanza.mode) : (unit, Action.t) Build.t -> unit =
+    SC.add_rule sctx ~dir ~mode ~loc:stanza.loc
 
   let expand_flags flags =
     Expander.expand_and_eval_set expander
@@ -189,7 +189,7 @@ module Run (P : PARAMS) : sig end = struct
 
     (* 1. A first invocation of Menhir creates a mock [.ml] file. *)
 
-    rule (
+    rule ~mode:Standard (
       expanded_flags
       >>>
       menhir
@@ -208,7 +208,9 @@ module Run (P : PARAMS) : sig end = struct
       Module.make
         name
         ~visibility:Public
+        ~kind:Impl
         ~impl:{ path = mock_ml base; syntax = OCaml }
+        ~obj_dir:(Compilation_context.obj_dir cctx)
     in
 
     (* The following incantation allows the mock [.ml] file to be preprocessed

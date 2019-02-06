@@ -1,4 +1,4 @@
-open !Stdune
+open! Stdune
 open Fiber.O
 
 module type Input = Memo_intf.Input
@@ -131,7 +131,7 @@ module Cached_value = struct
     else begin
       let rec deps_changed acc = function
         | [] ->
-          Fiber.parallel_map acc ~f:(fun x -> x) >>| List.exists ~f:(fun x -> x)
+          Fiber.parallel_map acc ~f:Fn.id >>| List.exists ~f:Fn.id
         | Last_dep.T (node, prev_output) :: deps ->
           match node.state with
           | Running (run, ivar) ->
@@ -204,25 +204,19 @@ let global_dep_dag = Dag.create ()
 
 (* fiber context variable keys *)
 let call_stack_key = Fiber.Var.create ()
-let get_call_stack =
-  Fiber.Var.get call_stack_key (* get call stack *)
-  >>| Option.value ~default:[] (* default call stack is empty *)
+let get_call_stack () = Fiber.Var.get call_stack_key |> Option.value ~default:[]
 
 let push_stack_frame frame f =
-  get_call_stack >>= fun stack ->
+  let stack = get_call_stack () in
   Fiber.Var.set call_stack_key (frame :: stack) f
 
-let dump_stack v =
-  get_call_stack
-  >>|
-  (Printf.printf "Memoized function stack:\n";
-   List.iter ~f:(
-     fun st -> Printf.printf "   %s %s\n"
-                 (Stack_frame.name st)
-                 (Stack_frame.input st |> Sexp.to_string)
-   )
-  )
-  >>| (fun _ -> v)
+let dump_stack () =
+  let stack = get_call_stack () in
+  Printf.eprintf "Memoized function stack:\n";
+  List.iter stack ~f:(fun st ->
+    Printf.eprintf "   %s %s\n"
+      (Stack_frame.name st)
+      (Stack_frame.input st |> Sexp.to_string))
 
 module Visibility = struct
   type t =
@@ -245,12 +239,13 @@ module Make_gen
   type 'a t =
     { spec  : (Input.t, 'a) Spec.t
     ; cache : (Input.t, 'a) Dep_node.t Table.t
+    ; mutable fdecl : (Input.t -> 'a Fiber.t) Fdecl.t option
     }
 
   type _ Spec.witness += W : Input.t Spec.witness
 
   let add_rev_dep dep_node =
-    get_call_stack >>| function
+    match get_call_stack () with
     | [] -> ()
     | (Dep_node.T rev_dep) :: _ as stack ->
       (* if the caller doesn't already contain this as a dependent *)
@@ -259,10 +254,10 @@ module Make_gen
         if Dag.is_child rev_dep dep_node |> not then
           Dag.add global_dep_dag rev_dep dep_node
       with Dag.Cycle cycle ->
-        Cycle_error.E {
+        raise (Cycle_error.E {
           stack = stack;
           cycle = List.map cycle ~f:(fun node -> node.Dag.data)
-        } |> raise
+        })
 
   let get_deps t inp =
     match Table.find t.cache inp with
@@ -271,7 +266,7 @@ module Make_gen
       Some (List.map cv.deps ~f:(fun (Last_dep.T (n,_u)) ->
         (Function_name.to_string n.spec.name, ser_input n)))
 
-  let create name ?(allow_cutoff=true) ~doc output f =
+  let create_internal name ?(allow_cutoff=true) ~doc output f fdecl =
     let name = Function_name.make name in
     let spec =
       { Spec.
@@ -290,12 +285,26 @@ module Make_gen
      | Private -> ());
     { cache = Table.create 1024
     ; spec
+    ; fdecl
     }
+
+  let create name ?allow_cutoff ~doc output f =
+    create_internal name ?allow_cutoff ~doc output f None
+
+  let fcreate name ?allow_cutoff ~doc output =
+    let f = Fdecl.create () in
+    create_internal name ?allow_cutoff ~doc output (fun x -> Fdecl.get f x)
+      (Some f)
+
+  let set_impl t f =
+    match t.fdecl with
+    | None -> invalid_arg "Memo.set_impl"
+    | Some fdecl -> Fdecl.set fdecl f
 
   let compute t inp ivar dep_node =
     (* define the function to update / double check intermediate result *)
     (* set context of computation then run it *)
-    push_stack_frame (T dep_node) (t.spec.f inp) >>= fun res ->
+    push_stack_frame (T dep_node) (fun () -> t.spec.f inp) >>= fun res ->
     (* update the output cache with the correct value *)
     let deps =
       Dag.children (dag_node dep_node)
@@ -338,10 +347,10 @@ module Make_gen
       in
       dep_node.dag_node <- lazy dag_node;
       Table.add t.cache inp dep_node;
-      add_rev_dep dag_node >>= fun () ->
+      add_rev_dep dag_node;
       compute t inp ivar dep_node
     | Some dep_node ->
-      add_rev_dep (dag_node dep_node) >>= fun () ->
+      add_rev_dep (dag_node dep_node);
       match dep_node.state with
       | Running (run, fut) ->
         if Run.is_current run then
@@ -354,11 +363,10 @@ module Make_gen
         | None -> recompute t inp dep_node
 
   let peek t inp =
-    (* This doesn't add a reverse dependency, which is wrong, see
-       https://github.com/ocaml/dune/issues/1583 for details.  *)
     match Table.find t.cache inp with
     | None -> None
     | Some dep_node ->
+      add_rev_dep (dag_node dep_node);
       match dep_node.state with
       | Running _ -> None
       | Done cv ->

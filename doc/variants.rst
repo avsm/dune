@@ -1,10 +1,6 @@
-*******************************************
-Virtual Libraries & Variants (experimental)
-*******************************************
-
-.. attention::
-    This feature is experimental. It is expected to land in dune in a next
-    release, but the precise syntax and semantics are not yet defined.
+****************************
+Virtual Libraries & Variants
+****************************
 
 Virtual libraries correspond to dune's ability to compile parameterized
 libraries and delay the selection of concrete implementations until linking an
@@ -88,13 +84,6 @@ Some of these are temporary.
 
 * It is not possible to link more than one implementation for the same
   virtual library in one executable.
-
-* It is not possible to implement *installed* virtual libraries. It is planned to
-  lift this restriction soon.
-
-* It is not possible to define virtual libraries and implementations in the
-  ``(wrapped false)`` mode. It is possible to lift this restriction, but there
-  are no plans to do so. Everyone is encouraged to migrate to ``(wrapped true)``.
 
 * It is not possible for implementations to introduce new public modules. That
   is, modules that aren't a part of the virtual library's cmi. Consequently, a

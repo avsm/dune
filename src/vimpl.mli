@@ -8,7 +8,9 @@ type t
 val make
   :  vlib:Lib.t
   -> impl:Dune_file.Library.t
+  -> dir:Path.t
   -> vlib_modules:Lib_modules.t
+  -> vlib_foreign_objects:Path.t list
   -> vlib_dep_graph:Dep_graph.Ml_kind.t
   -> t
 
@@ -26,7 +28,7 @@ val add_vlib_modules : t option -> Module.Name_map.t -> Module.Name_map.t
 
 val impl_only : t option -> Module.t list
 
-val aliased_modules : t option -> Module.Name_map.t -> Module.Name_map.t
+val aliased_modules : t option -> Lib_modules.t -> Module.Name_map.t
 
 val find_module : t option -> Module.t -> Module.t option
 

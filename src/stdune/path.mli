@@ -8,7 +8,7 @@ module Local : sig
   val to_string : t -> string
   val pp : Format.formatter -> t -> unit
   module L : sig
-    val relative : ?error_loc:Loc.t -> t -> string list -> t
+    val relative : ?error_loc:Loc0.t -> t -> string list -> t
   end
 end
 
@@ -55,7 +55,7 @@ end
 module Map : Map.S with type key = t
 module Table : Hashtbl.S with type key = t
 
-val of_string : ?error_loc:Loc.t -> string -> t
+val of_string : ?error_loc:Loc0.t -> string -> t
 val to_string : t -> string
 
 (** [to_string_maybe_quoted t] is [maybe_quoted (to_string t)] *)
@@ -68,7 +68,7 @@ val is_root : t -> bool
 
 val is_managed : t -> bool
 
-val relative : ?error_loc:Loc.t -> t -> string -> t
+val relative : ?error_loc:Loc0.t -> t -> string -> t
 
 (** Create an external path. If the argument is relative, assume it is relative
     to the initial directory dune was launched in. *)
@@ -160,6 +160,7 @@ val extension : t -> string
 val split_extension : t -> t * string
 
 val pp : Format.formatter -> t -> unit
+val pp_in_source : Format.formatter -> t -> unit
 val pp_debug : Format.formatter -> t -> unit
 
 val build_dir_exists : unit -> bool

@@ -14,12 +14,10 @@ type t =
              result option String_with_vars.expander
   }
 
-type var_expander =
-  (Value.t list, Pform.Expansion.t) result option String_with_vars.expander
-
 let scope t = t.scope
 let dir t = t.dir
 let bindings t = t.bindings
+let artifacts_host t = t.artifacts_host
 
 let make_ocaml_config ocaml_config =
   let string s = [Value.String s] in
@@ -172,10 +170,12 @@ module Resolved_forms = struct
     None
 end
 
-type targets =
-  | Static of Path.t list
-  | Infer
-  | Alias
+module Targets = struct
+  type t =
+    | Static of Path.t list
+    | Infer
+    | Forbidden of string
+end
 
 let path_exp path = [Value.Path path]
 let str_exp  str  = [Value.String str]
@@ -326,13 +326,13 @@ let expand_and_record_deps acc ~dir ~read_package ~dep_kind
         | Var (First_dep | Deps | Named_local) -> None
         | Var Targets ->
           let loc = String_with_vars.Var.loc pform in
-          begin match targets_written_by_user with
+          begin match (targets_written_by_user : Targets.t) with
           | Infer ->
             Errors.fail loc "You cannot use %s with inferred rules."
               (String_with_vars.Var.describe pform)
-          | Alias ->
-            Errors.fail loc "You cannot use %s in aliases."
-              (String_with_vars.Var.describe pform)
+          | Forbidden context ->
+            Errors.fail loc "You cannot use %s in %s."
+              (String_with_vars.Var.describe pform) context
           | Static l ->
             Some (Value.L.dirs l) (* XXX hack to signal no dep *)
           end
@@ -470,3 +470,30 @@ let expand_and_eval_set t set ~standard =
 let eval_blang t = function
   | Blang.Const x -> x (* common case *)
   | blang -> Blang.eval blang ~dir:t.dir ~f:(expand_var_exn t)
+
+module Option = struct
+  exception Not_found
+
+  let expand_var_exn t var syn =
+    t.expand_var t var syn
+    |> Option.map ~f:(function
+      | Ok s -> s
+      | Error _ -> raise_notrace Not_found)
+
+  let expand t ~mode ~template =
+    match
+      String_with_vars.expand ~dir:t.dir ~mode template
+        ~f:(expand_var_exn t)
+    with
+    | exception Not_found -> None
+    | s -> Some s
+
+  let expand_path t sw =
+    expand t ~mode:Single ~template:sw
+    |> Option.map ~f:(
+      Value.to_path ~error_loc:(String_with_vars.loc sw) ~dir:t.dir)
+
+  let expand_str t sw =
+    expand t ~mode:Single ~template:sw
+    |> Option.map ~f:(Value.to_string ~dir:t.dir)
+end

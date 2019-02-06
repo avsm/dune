@@ -216,6 +216,22 @@
    (progn (run %{exe:cram.exe} -test run.t) (diff? run.t run.t.corrected)))))
 
 (alias
+ (name duplicate-c-cxx)
+ (deps (package dune) (source_tree test-cases/duplicate-c-cxx))
+ (action
+  (chdir
+   test-cases/duplicate-c-cxx
+   (progn (run %{exe:cram.exe} -test run.t) (diff? run.t run.t.corrected)))))
+
+(alias
+ (name duplicate-c-cxx-obj)
+ (deps (package dune) (source_tree test-cases/duplicate-c-cxx-obj))
+ (action
+  (chdir
+   test-cases/duplicate-c-cxx-obj
+   (progn (run %{exe:cram.exe} -test run.t) (diff? run.t run.t.corrected)))))
+
+(alias
  (name duplicate-target-no-loc)
  (deps (package dune) (source_tree test-cases/duplicate-target-no-loc))
  (action
@@ -493,6 +509,14 @@
  (action
   (chdir
    test-cases/github1616
+   (progn (run %{exe:cram.exe} -test run.t) (diff? run.t run.t.corrected)))))
+
+(alias
+ (name github1811)
+ (deps (package dune) (source_tree test-cases/github1811))
+ (action
+  (chdir
+   test-cases/github1811
    (progn (run %{exe:cram.exe} -test run.t) (diff? run.t run.t.corrected)))))
 
 (alias
@@ -1143,11 +1167,37 @@
    (progn (run %{exe:cram.exe} -test run.t) (diff? run.t run.t.corrected)))))
 
 (alias
+ (name toplevel-stanza)
+ (deps (package dune) (source_tree test-cases/toplevel-stanza))
+ (action
+  (chdir
+   test-cases/toplevel-stanza
+   (progn
+    (run %{exe:cram.exe} -skip-versions <4.05.0 -test run.t)
+    (diff? run.t run.t.corrected)))))
+
+(alias
  (name trace-file)
  (deps (package dune) (source_tree test-cases/trace-file))
  (action
   (chdir
    test-cases/trace-file
+   (progn (run %{exe:cram.exe} -test run.t) (diff? run.t run.t.corrected)))))
+
+(alias
+ (name transitive-deps-mode)
+ (deps (package dune) (source_tree test-cases/transitive-deps-mode))
+ (action
+  (chdir
+   test-cases/transitive-deps-mode
+   (progn (run %{exe:cram.exe} -test run.t) (diff? run.t run.t.corrected)))))
+
+(alias
+ (name upgrader)
+ (deps (package dune) (source_tree test-cases/upgrader))
+ (action
+  (chdir
+   test-cases/upgrader
    (progn (run %{exe:cram.exe} -test run.t) (diff? run.t run.t.corrected)))))
 
 (alias
@@ -1172,7 +1222,9 @@
  (action
   (chdir
    test-cases/utop-default
-   (progn (run %{exe:cram.exe} -test run.t) (diff? run.t run.t.corrected)))))
+   (progn
+    (run %{exe:cram.exe} -skip-versions <4.05.0 -test run.t)
+    (diff? run.t run.t.corrected)))))
 
 (alias
  (name variants)
@@ -1213,7 +1265,7 @@
   (chdir
    test-cases/wrapped-transition
    (progn
-    (run %{exe:cram.exe} -skip-versions <4.07.0 -test run.t)
+    (run %{exe:cram.exe} -skip-versions <4.06.0 -test run.t)
     (diff? run.t run.t.corrected)))))
 
 (alias
@@ -1246,6 +1298,8 @@
   (alias dune-project-edition)
   (alias dune-project-meta)
   (alias dup-fields)
+  (alias duplicate-c-cxx)
+  (alias duplicate-c-cxx-obj)
   (alias duplicate-target-no-loc)
   (alias embed-jbuild)
   (alias enabled_if)
@@ -1280,6 +1334,7 @@
   (alias github1549)
   (alias github1560)
   (alias github1616)
+  (alias github1811)
   (alias github20)
   (alias github24)
   (alias github25)
@@ -1357,7 +1412,10 @@
   (alias tests-stanza-action)
   (alias tests-stanza-action-syntax-version)
   (alias too-many-parens)
+  (alias toplevel-stanza)
   (alias trace-file)
+  (alias transitive-deps-mode)
+  (alias upgrader)
   (alias use-meta)
   (alias utop)
   (alias utop-default)
@@ -1397,6 +1455,8 @@
   (alias dune-project-edition)
   (alias dune-project-meta)
   (alias dup-fields)
+  (alias duplicate-c-cxx)
+  (alias duplicate-c-cxx-obj)
   (alias duplicate-target-no-loc)
   (alias embed-jbuild)
   (alias enabled_if)
@@ -1429,6 +1489,7 @@
   (alias github1549)
   (alias github1560)
   (alias github1616)
+  (alias github1811)
   (alias github20)
   (alias github24)
   (alias github25)
@@ -1496,9 +1557,11 @@
   (alias tests-stanza-action)
   (alias tests-stanza-action-syntax-version)
   (alias too-many-parens)
+  (alias toplevel-stanza)
   (alias trace-file)
+  (alias transitive-deps-mode)
+  (alias upgrader)
   (alias use-meta)
-  (alias utop-default)
   (alias variants)
   (alias windows-diff)
   (alias workspaces)

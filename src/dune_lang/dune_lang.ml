@@ -171,6 +171,85 @@ let rec add_loc t ~loc : Ast.t =
   | List l -> List (loc, List.map l ~f:(add_loc ~loc))
   | Template t -> Template { t with loc }
 
+module Cst = struct
+  module Comment = Lexer_shared.Token.Comment
+
+  type t =
+    | Atom of Loc.t * Atom.t
+    | Quoted_string of Loc.t * string
+    | Template of Template.t
+    | List of Loc.t * t list
+    | Comment of Loc.t * Comment.t
+
+  let loc (Atom (loc, _) | Quoted_string (loc, _) | List (loc, _)
+          | Template { loc ; _ } | Comment (loc, _)) = loc
+
+  let fetch_legacy_comments t ~file_contents =
+    let rec loop t =
+      match t with
+      | Template _ | Quoted_string _ | Atom _ | Comment (_, Lines _) -> t
+      | List (loc, l) -> List (loc, List.map l ~f:loop)
+      | Comment (loc, Legacy) ->
+        let start = loc.start.pos_cnum in
+        let stop = loc.stop.pos_cnum in
+        let s =
+          if file_contents.[start] = '#' && file_contents.[start+1] = '|' then
+            String.sub file_contents ~pos:(start + 2) ~len:(stop - start - 4)
+          else
+            String.sub file_contents ~pos:start ~len:(stop - start)
+        in
+        Comment (loc, Lines (String.split s ~on:'\n'))
+    in
+    loop t
+
+  let rec abstract : t -> Ast.t option = function
+    | Atom (loc, atom) -> Some (Atom (loc, atom))
+    | Quoted_string (loc, s) -> Some (Quoted_string (loc, s))
+    | Template t -> Some (Template t)
+    | List (loc, l) -> Some (List (loc, List.filter_map ~f:abstract l))
+    | Comment _ -> None
+
+  let rec concrete : Ast.t -> t = function
+    | Atom (loc, atom) -> Atom (loc, atom)
+    | Quoted_string (loc, s) -> Quoted_string (loc, s)
+    | Template t -> Template t
+    | List (loc, l) -> List (loc, List.map ~f:concrete l)
+
+  let extract_comments =
+    let rec loop acc = function
+      | Atom _ | Quoted_string _ | Template _ -> acc
+      | List (_, l) -> List.fold_left l ~init:acc ~f:loop
+      | Comment (loc, comment) -> (loc, comment) :: acc
+    in
+    List.fold_left ~init:[] ~f:loop
+
+  let tokenize ts =
+    let tokens = ref [] in
+    let emit loc (token : Lexer.Token.t) =
+      tokens := (loc, token) :: !tokens
+    in
+    let rec iter = function
+      | Atom (loc, s) ->
+        emit loc (Atom s)
+      | Quoted_string (loc, s) ->
+        emit loc (Quoted_string s)
+      | Template ({ loc; _ } as template) ->
+        emit loc (Template template)
+      | Comment (loc, comment) ->
+        emit loc (Comment comment)
+      | List (loc, l) ->
+        emit { loc with
+               stop = { loc.start with pos_cnum = loc.start.pos_cnum + 1 } }
+          Lparen;
+        List.iter l ~f:iter;
+        emit { loc with
+               start = { loc.stop with pos_cnum = loc.stop.pos_cnum - 1 } }
+          Rparen
+    in
+    List.iter ts ~f:iter;
+    List.rev !tokens
+end
+
 module Parse_error = struct
   include Lexer.Error
 
@@ -208,29 +287,55 @@ module Parser = struct
         | Many -> sexps
         | Many_as_one ->
           match sexps with
-          | [] -> List (Loc.in_file lexbuf.lex_curr_p.pos_fname, [])
+          | [] -> List (Loc.in_file
+                          (Path.of_string lexbuf.lex_curr_p.pos_fname), [])
           | x :: l ->
             let last = List.fold_left l ~init:x ~f:(fun _ x -> x) in
             let loc = { (Ast.loc x) with stop = (Ast.loc last).stop } in
             List (loc, x :: l)
   end
 
-  let rec loop depth lexer lexbuf acc =
-    match (lexer lexbuf : Lexer.Token.t) with
+  (* To avoid writing two parsers, one for the Cst and one for the
+     Ast, we write only one that work for both.
+
+     The natural thing to do would be to have parser that produce
+     [Cst.t] value and drop comment for the [Ast.t] one. However the
+     most used parser is the one producing Ast one, so it is the one
+     we want to go fast. As a result, we encode comment as special
+     [Ast.t] values and decode them for the [Cst.t] parser.
+
+     We could also do clever things with GADTs, but it will add type
+     variables everywhere which is annoying.  *)
+  let rec cst_of_encoded_ast (x : Ast.t) : Cst.t =
+    match x with
+    | Template t -> Template t
+    | Quoted_string (loc, s) -> Quoted_string (loc, s)
+    | List (loc, l) -> List (loc, List.map l ~f:cst_of_encoded_ast)
+    | Atom (loc, (A s as atom)) ->
+      match s.[0] with
+      | '\000' ->
+        Comment (loc, Lines (String.drop s 1 |> String.split ~on:'\n'))
+      | '\001' ->
+        Comment (loc, Legacy)
+      | _ ->
+        Atom (loc, atom)
+
+  let rec loop with_comments depth lexer lexbuf acc =
+    match (lexer ~with_comments lexbuf : Lexer.Token.t) with
     | Atom a ->
       let loc = Loc.of_lexbuf lexbuf in
-      loop depth lexer lexbuf (Ast.Atom (loc, a) :: acc)
+      loop with_comments depth lexer lexbuf (Ast.Atom (loc, a) :: acc)
     | Quoted_string s ->
       let loc = Loc.of_lexbuf lexbuf in
-      loop depth lexer lexbuf (Quoted_string (loc, s) :: acc)
+      loop with_comments depth lexer lexbuf (Quoted_string (loc, s) :: acc)
     | Template t ->
       let loc = Loc.of_lexbuf lexbuf in
-      loop depth lexer lexbuf (Template { t with loc } :: acc)
+      loop with_comments depth lexer lexbuf (Template { t with loc } :: acc)
     | Lparen ->
       let start = Lexing.lexeme_start_p lexbuf in
-      let sexps = loop (depth + 1) lexer lexbuf [] in
+      let sexps = loop with_comments (depth + 1) lexer lexbuf [] in
       let stop = Lexing.lexeme_end_p lexbuf in
-      loop depth lexer lexbuf (List ({ start; stop }, sexps) :: acc)
+      loop with_comments depth lexer lexbuf (List ({ start; stop }, sexps) :: acc)
     | Rparen ->
       if depth = 0 then
         error (Loc.of_lexbuf lexbuf)
@@ -239,8 +344,12 @@ module Parser = struct
     | Sexp_comment ->
       let sexps =
         let loc = Loc.of_lexbuf lexbuf in
-        match loop depth lexer lexbuf [] with
-        | _ :: sexps -> sexps
+        match loop with_comments depth lexer lexbuf [] with
+        | commented :: sexps ->
+          if not with_comments then
+            sexps
+          else
+            Atom (Ast.loc commented, Atom.of_string "\001") :: sexps
         | [] -> error loc "s-expression missing after #;"
       in
       List.rev_append acc sexps
@@ -249,13 +358,67 @@ module Parser = struct
         error (Loc.of_lexbuf lexbuf)
           "unclosed parenthesis at end of input";
       List.rev acc
+    | Comment comment ->
+      if not with_comments then
+        loop false depth lexer lexbuf acc
+      else begin
+        let loc = Loc.of_lexbuf lexbuf in
+        let encoded =
+          match comment with
+          | Lines lines -> "\000" ^ String.concat lines ~sep:"\n"
+          | Legacy -> "\001"
+        in
+        loop with_comments depth lexer lexbuf
+          (Atom (loc, Atom.of_string encoded) :: acc)
+      end
 
   let parse ~mode ?(lexer=Lexer.token) lexbuf =
-    loop 0 lexer lexbuf []
+    loop false 0 lexer lexbuf []
     |> Mode.make_result mode lexbuf
+
+  let parse_cst ?(lexer=Lexer.token) lexbuf =
+    loop true 0 lexer lexbuf []
+    |> List.map ~f:cst_of_encoded_ast
 end
 
-let parse_string ~fname ~mode ?lexer str =
+let insert_comments csts comments =
+  (* To insert the comments, we tokenize the csts, reconciliate the
+     token streams and parse the result again. This is not the fastest
+     implementation, but at least it is simple. *)
+  let compare (a, _) (b, _) =
+    Int.compare a.Loc.start.pos_cnum b.Loc.start.pos_cnum
+  in
+  let rec reconciliate acc tokens1 tokens2 =
+    match tokens1, tokens2 with
+    | [], l  | l, [] -> List.rev_append acc l
+    | tok1 :: rest1, tok2 :: rest2 ->
+      match compare tok1 tok2 with
+      | Eq
+      | Lt -> reconciliate (tok1 :: acc) rest1 tokens2
+      | Gt -> reconciliate (tok2 :: acc) tokens1 rest2
+  in
+  let tokens =
+    reconciliate []
+      (Cst.tokenize csts)
+      (List.sort comments ~compare
+       |> List.map ~f:(fun (loc, comment) ->
+         (loc, Lexer.Token.Comment comment)))
+  in
+  let tokens = ref tokens in
+  let lexer ~with_comments:_ (lb : Lexing.lexbuf) =
+    match !tokens with
+    | [] ->
+      lb.lex_curr_p <- lb.lex_start_p;
+      Lexer.Token.Eof
+    | ({ start; stop }, tok) :: rest ->
+      tokens := rest;
+      lb.lex_start_p <- start;
+      lb.lex_curr_p <- stop;
+      tok
+  in
+  Parser.parse_cst (Lexing.from_string "") ~lexer
+
+let lexbuf_from_string ~fname str =
   let lb = Lexing.from_string str in
   lb.lex_curr_p <-
     { pos_fname = fname
@@ -263,13 +426,22 @@ let parse_string ~fname ~mode ?lexer str =
     ; pos_bol   = 0
     ; pos_cnum  = 0
     };
+  lb
+
+let parse_string ~fname ~mode ?lexer str =
+  let lb = lexbuf_from_string ~fname str in
   Parser.parse ~mode ?lexer lb
+
+let parse_cst_string ~fname ?lexer str =
+  let lb = lexbuf_from_string ~fname str in
+  Parser.parse_cst ?lexer lb
 
 type dune_lang = t
 
 module Encoder = struct
   type nonrec 'a t = 'a -> t
   let unit () = List []
+  let char c = atom_or_quoted_string (String.make 1 c)
   let string = atom_or_quoted_string
   let int n = Atom (Atom.of_int n)
   let float f = Atom (Atom.of_float f)
@@ -303,21 +475,29 @@ module Encoder = struct
     | None -> Absent
     | Some v -> Normal (name, f v)
 
+  let field_b name v =
+    if v then
+      Inlined_list (name, [])
+    else
+      Absent
+
   let field_l name f l =
     match l with
     | [] -> Absent
     | _ -> Inlined_list (name, List.map l ~f)
 
-  let record_fields (syntax : Syntax.t) (l : field list) =
+  let field_i name f x =
+    match f x with
+    | [] -> Absent
+    | l -> Inlined_list (name, l)
+
+  let record_fields (l : field list) =
     List.filter_map l ~f:(function
       | Absent -> None
       | Normal (name, v) ->
         Some (List [Atom (Atom.of_string name); v])
       | Inlined_list (name, l) ->
-        Some (List (Atom (Atom.of_string name) ::
-                    match syntax with
-                    | Dune -> l
-                    | Jbuild -> [List l])))
+        Some (List (Atom (Atom.of_string name) :: l)))
 
   let unknown _ = unsafe_atom_of_string "<unknown>"
 end
@@ -668,7 +848,7 @@ module Decoder = struct
     let x, state2 = t ctx state1 in
     ((loc_between_states ctx state1 state2, x), state2)
 
-  let raw = next (fun x -> x)
+  let raw = next Fn.id
 
   let unit =
     next
@@ -687,6 +867,13 @@ module Decoder = struct
         | Ok x -> x)
 
   let string = plain_string (fun ~loc:_ x -> x)
+
+  let char = plain_string (fun ~loc x ->
+    if String.length x = 1 then
+      x.[0]
+    else
+      of_sexp_errorf loc "character expected")
+
   let int =
     basic "Integer" (fun s ->
       match int_of_string s with

@@ -14,31 +14,38 @@ val name : t -> Lib_name.t
    have multiple source directories because of [copy_files]. *)
 (** Directory where the source files for the library are located. *)
 val src_dir : t -> Path.t
+val orig_src_dir : t -> Path.t
 
 (** Directory where the object files for the library are located. *)
-val obj_dir : t -> Path.t
-
-val private_obj_dir : t -> Path.t option
+val obj_dir : t -> Obj_dir.t
+val public_cmi_dir : t -> Path.t
 
 (** Same as [Path.is_managed (obj_dir t)] *)
 val is_local : t -> bool
 
 val synopsis     : t -> string option
-val kind         : t -> Dune_package.Lib.Kind.t
+val kind         : t -> Lib_kind.t
 val archives     : t -> Path.t list Mode.Dict.t
 val plugins      : t -> Path.t list Mode.Dict.t
 val jsoo_runtime : t -> Path.t list
 val jsoo_archive : t -> Path.t option
+val modes        : t -> Mode.Dict.Set.t
 
-val foreign_objects : t -> Path.t list
+val foreign_objects : t -> Path.t list Lib_info.Source.t
 
 val main_module_name : t -> Module.Name.t option Or_exn.t
+val wrapped : t -> Wrapped.t option Or_exn.t
 
-val virtual_ : t -> Lib_info.Virtual.t option
+val virtual_ : t -> Lib_modules.t Lib_info.Source.t option
 
 (** A unique integer identifier. It is only unique for the duration of
     the process *)
-val unique_id : t -> int
+module Id : sig
+  type t
+
+  val compare : t -> t -> Ordering.t
+end
+val unique_id : t -> Id.t
 
 module Set : Set.S with type elt = t
 
@@ -50,6 +57,7 @@ val package : t -> Package.Name.t option
 
 (** Operations on list of libraries *)
 module L : sig
+  type lib
   type nonrec t = t list
 
   val include_paths : t -> stdlib_dir:Path.t -> Path.Set.t
@@ -73,13 +81,19 @@ module L : sig
   val jsoo_runtime_files : t -> Path.t list
 
   val remove_dups : t -> t
-end
+
+  val top_closure
+    :  'a list
+    -> key:('a -> lib)
+    -> deps:('a -> 'a list)
+    -> ('a list, 'a list) Result.t
+end with type lib := t
 
 (** Operation on list of libraries and modules *)
 module Lib_and_module : sig
   type nonrec t =
     | Lib of t
-    | Module of Module.t * Path.t (** obj_dir *)
+    | Module of Module.t
 
   val link_flags : t list -> mode:Mode.t -> stdlib_dir:Path.t -> _ Arg_spec.t
 
@@ -160,8 +174,8 @@ type sub_system = ..
 module Compile : sig
   type t
 
-  (** Return the list of dependencies needed for compiling this library *)
-  val requires : t -> L.t Or_exn.t
+  (** Return the list of dependencies needed for linking this library/exe *)
+  val requires_link : t -> L.t Or_exn.t Lazy.t
 
   (** Dependencies listed by the user + runtime dependencies from ppx *)
   val direct_requires : t -> L.t Or_exn.t
@@ -220,6 +234,7 @@ module DB : sig
   (** Create a database from a list of library stanzas *)
   val create_from_library_stanzas
     :  ?parent:t
+    -> has_native:bool
     -> ext_lib:string
     -> ext_obj:string
     -> (Path.t * Dune_file.Library.t) list
@@ -254,6 +269,7 @@ module DB : sig
       This function is for executables stanzas.  *)
   val resolve_user_written_deps_for_exes
     :  t
+    -> (Loc.t * string) list
     -> ?allow_overlaps:bool
     -> Dune_file.Lib_dep.t list
     -> pps:(Loc.t * Lib_name.t) list
@@ -314,5 +330,7 @@ end
 
 val to_dune_lib
   :  t
+  -> lib_modules:Lib_modules.t
+  -> foreign_objects:Path.t list
   -> dir:Path.t
   -> (Syntax.Version.t * Dune_lang.t list) Dune_package.Lib.t

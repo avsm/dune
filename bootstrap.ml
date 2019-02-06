@@ -29,7 +29,7 @@ end
 
 (* Directories with library names *)
 let dirs =
-  [ "src/which_program"      , Some "Which_program"
+  [ "src/wp"                 , Some "Wp"
   ; "src/stdune/caml"        , Some "Dune_caml"
   ; "src/stdune"             , Some "Stdune"
   ; "src/fiber"              , Some "Fiber"
@@ -37,7 +37,6 @@ let dirs =
   ; "src/dag"                , Some "Dag"
   ; "src/memo"               , Some "Memo"
   ; "src/ocaml-config"       , Some "Ocaml_config"
-  ; "src/catapult"           , Some "Catapult"
   ; "vendor/boot"            , None
   ; "src/dune_lang"              , Some "Dune_lang"
   ; "src"                    , None
@@ -372,9 +371,8 @@ let generate_file_with_all_the_sources () =
   let oc = open_out_bin generated_file in
   let pp = Lexer.create ~oc ~output_fname:generated_file in
   let pr fmt = ksprintf (Lexer.print_endline pp) fmt in
-  let dump fname =
-    Lexer.apply pp ~fname
-  in
+  let dump fname = Lexer.apply pp ~fname in
+  pr "let () = Printexc.record_backtrace true";
   let modules_by_lib =
     List.map topsorted_module_names ~f:(fun m ->
       let info = String_map.find m modules in

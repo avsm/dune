@@ -17,7 +17,7 @@ let dep_bindings ~extra_bindings deps =
 
 let user_rule sctx ?extra_bindings ~dir ~expander (rule : Rule.t) =
   if Expander.eval_blang expander rule.enabled_if then begin
-    let targets : Expander.targets =
+    let targets : Expander.Targets.t =
       match rule.targets with
       | Infer -> Infer
       | Static fns ->
@@ -55,7 +55,6 @@ let user_rule sctx ?extra_bindings ~dir ~expander (rule : Rule.t) =
          sctx
          (snd rule.action)
          ~loc:(fst rule.action)
-         ~dir
          ~expander
          ~dep_kind:Required
          ~targets
@@ -93,7 +92,7 @@ let copy_files sctx ~dir ~expander ~src_dir (def: Copy_files.t) =
       Path.pp src_in_src;
   (* add rules *)
   let src_in_build = Path.append (SC.context sctx).build_dir src_in_src in
-  let files = SC.eval_glob sctx ~dir:src_in_build re in
+  let files = Build_system.eval_glob ~dir:src_in_build re in
   List.map files ~f:(fun basename ->
     let file_src = Path.relative src_in_build basename in
     let file_dst = Path.relative dir basename in
@@ -138,10 +137,9 @@ let alias sctx ?extra_bindings ~dir ~expander (alias_conf : Alias_conf.t) =
            sctx
            action
            ~loc
-           ~dir
            ~expander
            ~dep_kind:Required
-           ~targets:Alias
+           ~targets:(Forbidden "aliases")
            ~targets_dir:dir)
   else
     add_alias sctx

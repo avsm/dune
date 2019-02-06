@@ -1,6 +1,14 @@
 unreleased
 ----------
 
+- Second step of the deprecation of jbuilder: the `jbuilder` binary
+  now emits a warning on every startup and both `jbuilder` and `dune`
+  emit warnings when encountering `jbuild` files (#...., @diml)
+
+- Change the layout of build artifacts inside _build. The new layout enables
+  optimizations that depend on the presence of `.cmx` files of private modules
+  (#1676 @bobot)
+
 - Fix merlin handling of private module visibility (#1653 @bobot)
 
 - unstable-fmt: use boxes to wrap some lists (#1608, fix #1153, @emillon,
@@ -39,6 +47,85 @@ unreleased
   @rudihorn, @diml)
 
 - Add `--trace-file` option to trace dune internals (#1639, fix #1180, @emillon)
+
+- Add `--no-print-directory` (borrowed from GNU make) to suppress
+  `Entering directory` messages. (#1668, @dra27)
+
+- Remove `--stats` and track fd usage in `--trace-file` (#1667, @emillon)
+
+- Add virtual libraries feature and enable it by default (#1430 fixes #921,
+  @rgrinberg)
+
+- Fix handling of Control+C in watch mode (#1678, fixes #1671, @diml)
+
+- Look for jsoo runtime in the same dir as the `js_of_ocaml` binary
+  when the ocamlfind package is not available (#1467, @nojb)
+
+- Make the `seq` package available for OCaml >= 4.07 (#1714, @rgrinberg)
+
+- Add locations to error messages where a rule fails to generate targets and
+  rules that require files outside the build/source directory. (#1708, fixes
+  #848, @rgrinberg)
+
+- Let `Configurator` handle `sizeof` (in addition to negative numbers).
+  (#1726, fixes #1723, @Chris00)
+
+- Fix an issue causing menhir generated parsers to fail to build in
+  some cases. The fix is to systematically use `-short-paths` when
+  calling `ocamlc -i` (#1743, fix #1504, @diml)
+
+- Never raise when printing located errors. The code that would print the
+  location excerpts was prone to raising. (#1744, fix #1736, @rgrinberg)
+
+- Add a `dune upgrade` command for upgrading jbuilder projects to Dune
+  (#1749, @diml)
+
+- When automatically creating a `dune-project` file, insert the
+  detected name in it (#1749, @diml)
+
+- Add `(implicit_transitive_deps <bool>)` mode to dune projects. When this mode
+  is turned off, transitive dependencies are not accessible. Only listed
+  dependencies are directly accessible. (#1734, #430, @rgrinberg, @hnrgrgr)
+
+- Add `toplevel` stanza. This stanza is used to define toplevels with libraries
+  already preloaded. (#1713, @rgrinberg)
+
+- Generate `.merlin` files that account for normal preprocessors defined using a
+  subset of the `action` language. (#1768, @rgrinberg)
+
+- Emit `(orig_src_dir <path>)` metadata in `dune-package` for dune packages
+  built with `--store-orig-source-dir` command line flag (also controlled by
+  `DUNE_STORE_ORIG_SOURCE_DIR` env variable). This is later used to generate
+  `.merlin` with `S`-directives pointed to original source locations and thus
+  allowing merlin to see those. (#1750, @andreypopp)
+
+- Improve the behavior of `dune promote` when the files to be promoted have been
+  deleted. (#1775, fixes #1772, @diml)
+
+- unstable-fmt: preserve comments (#1766, @emillon)
+
+- Pass flags correctly when using `staged_pps` (#1779, fixes #1774, @diml)
+
+- Fix an issue with the use of `(mode promote)` in the menhir
+  stanza. It was previously causing intermediate *mock* files to be
+  promoted (#1783, fixes #1781, @diml)
+
+- unstable-fmt: ignore files using OCaml syntax (#1784, @emillon)
+
+- Configurator: Add `which` function to replace the `which` command line utility
+  in a cross platform way. (#1773, fixes #1705, @Chris00)
+
+- Make configurator append paths to `$PKG_CONFIG_PATH` on macOS. Previously it
+  was prepending paths and thus `$PKG_CONFIG_PATH` set by users could have been
+  overridden by homebrew installed libraries (#1785, @andreypopp)
+
+- Disallow c/cxx sources that share an object file in the same stubs archive.
+  This means that `foo.c` and `foo.cpp` can no longer exist in the same library.
+  (#1788, @rgrinberg)
+
+- Forbid use of `%{targets}` (or `${@}` in jbuild files) inside
+  preprocessing actions
+  (#1812, fixes #1811, @diml)
 
 1.6.2 (05/12/2018)
 ------------------

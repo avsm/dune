@@ -1,6 +1,7 @@
 open! Stdune
 open Import
 module Menhir_rules = Menhir
+module Toplevel_rules = Toplevel.Stanza
 open Dune_file
 open! No_io
 
@@ -73,6 +74,9 @@ module Gen(P : Install_rules.Params) = struct
     let for_stanza stanza =
       let dir = ctx_dir in
       match stanza with
+      | Toplevel toplevel ->
+        Toplevel_rules.setup ~sctx ~dir ~toplevel;
+        For_stanza.empty_none
       | Library lib ->
         let cctx, merlin =
           Lib_rules.rules lib ~dir ~scope ~dir_contents ~expander ~dir_kind in
@@ -127,7 +131,7 @@ module Gen(P : Install_rules.Params) = struct
           let src_expanded = Expander.expand_str expander src in
           Path.relative ctx_dir src_expanded)
         |> Path.Set.of_list
-        |> Super_context.add_alias_deps sctx
+        |> Build_system.Alias.add_deps
              (Build_system.Alias.all ~dir:ctx_dir);
         For_stanza.empty_none
       | _ ->
@@ -147,7 +151,7 @@ module Gen(P : Install_rules.Params) = struct
         List.map (Dir_contents.dirs dir_contents) ~f:(fun dc ->
           Path.drop_optional_build_context (Dir_contents.dir dc))
       in
-      Merlin.add_rules sctx ~dir:ctx_dir ~more_src_dirs ~scope ~dir_kind
+      Merlin.add_rules sctx ~dir:ctx_dir ~more_src_dirs ~expander ~dir_kind
         (Merlin.add_source_dir m src_dir));
     List.iter stanzas ~f:(fun stanza ->
       match (stanza : Stanza.t) with
@@ -177,7 +181,7 @@ module Gen(P : Install_rules.Params) = struct
           Menhir_rules.gen_rules cctx m ~dir:ctx_dir
         end
       | _ -> ());
-    Super_context.add_alias_deps sctx
+    Build_system.Alias.add_deps
       ~dyn_deps:(Build.paths_matching ~dir:ctx_dir ~loc:Loc.none (fun p ->
         not (List.exists js_targets ~f:(Path.equal p))))
       (Build_system.Alias.all ~dir:ctx_dir) Path.Set.empty;
@@ -215,7 +219,7 @@ module Gen(P : Install_rules.Params) = struct
            if Utop.is_utop_dir dir then
              Utop.setup sctx ~dir:(Path.parent_exn dir)
            else if components <> [] then
-             SC.load_dir sctx ~dir:(Path.parent_exn dir)
+             Build_system.load_dir ~dir:(Path.parent_exn dir)
          | Some _ ->
            (* This interprets "rule" and "copy_files" stanzas. *)
            let dir_contents = Dir_contents.get sctx ~dir in
@@ -223,7 +227,7 @@ module Gen(P : Install_rules.Params) = struct
            | Standalone ->
              ignore (gen_rules dir_contents [] ~dir : _ list)
            | Group_part root ->
-             SC.load_dir sctx ~dir:(Dir_contents.dir root)
+             Build_system.load_dir ~dir:(Dir_contents.dir root)
            | Group_root (lazy subs) ->
              let cctxs = gen_rules dir_contents [] ~dir in
              List.iter subs ~f:(fun dc ->
@@ -255,7 +259,7 @@ let relevant_stanzas pkgs stanzas =
     | Some package -> Package.Name.Set.mem pkgs package.name
     | None -> true)
 
-let gen ~contexts ~build_system
+let gen ~contexts
       ?(external_lib_deps_mode=false)
       ?only_packages conf =
   let open Fiber.O in
@@ -276,7 +280,7 @@ let gen ~contexts ~build_system
       | None -> Fiber.return None
       | Some h ->
         Fiber.Ivar.read (Hashtbl.find_exn sctxs h.name)
-        >>| fun x -> Some x
+        >>| Option.some
     in
     let stanzas () =
       Dune_load.Dune_files.eval ~context dune_files >>| fun stanzas ->
@@ -292,7 +296,6 @@ let gen ~contexts ~build_system
     let sctx =
       Super_context.create
         ?host
-        ~build_system
         ~context
         ~projects
         ~file_tree
@@ -308,7 +311,7 @@ let gen ~contexts ~build_system
   in
   Fiber.parallel_map contexts ~f:make_sctx >>| fun l ->
   let map = String.Map.of_list_exn l in
-  Build_system.set_rule_generators build_system
+  Build_system.set_rule_generators
     (String.Map.map map ~f:(fun (module M : Gen) -> M.gen_rules));
   String.Map.iter map ~f:(fun (module M : Gen) -> M.init ());
   String.Map.map map ~f:(fun (module M : Gen) -> M.sctx)
