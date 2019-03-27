@@ -11,6 +11,8 @@ module Stanza = struct
     { flags          : Ordered_set_lang.Unexpanded.t
     ; ocamlc_flags   : Ordered_set_lang.Unexpanded.t
     ; ocamlopt_flags : Ordered_set_lang.Unexpanded.t
+    ; c_flags        : Ordered_set_lang.Unexpanded.t
+    ; cxx_flags      : Ordered_set_lang.Unexpanded.t
     ; env_vars       : Env.t
     ; binaries       : File_bindings.Unexpanded.t
     }
@@ -36,34 +38,40 @@ module Stanza = struct
          Errors.fail loc "Variable %s is specified several times" k)
 
   let config =
-    let%map flags = field_oslu "flags"
-    and ocamlc_flags = field_oslu "ocamlc_flags"
-    and ocamlopt_flags = field_oslu "ocamlopt_flags"
-    and env_vars = env_vars_field
-    and binaries = field ~default:File_bindings.empty "binaries"
-                     (Syntax.since Stanza.syntax (1, 6)
-                      >>> File_bindings.Unexpanded.decode)
+    let+ flags = field_oslu "flags"
+    and+ ocamlc_flags = field_oslu "ocamlc_flags"
+    and+ ocamlopt_flags = field_oslu "ocamlopt_flags"
+    and+ c_flags = Ordered_set_lang.Unexpanded.field "c_flags"
+                     ~check:(Syntax.since Stanza.syntax (1, 7))
+    and+ cxx_flags = Ordered_set_lang.Unexpanded.field "cxx_flags"
+                       ~check:(Syntax.since Stanza.syntax (1, 7))
+    and+ env_vars = env_vars_field
+    and+ binaries = field ~default:File_bindings.empty "binaries"
+                      (Syntax.since Stanza.syntax (1, 6)
+                       >>> File_bindings.Unexpanded.decode)
     in
     { flags
     ; ocamlc_flags
     ; ocamlopt_flags
+    ; c_flags
+    ; cxx_flags
     ; env_vars
     ; binaries
     }
 
   let rule =
     enter
-      (let%map pat =
+      (let+ pat =
          match_keyword [("_", return Any)]
            ~fallback:(string >>| fun s -> Profile s)
-       and configs = fields config
+       and+ configs = fields config
        in
        (pat, configs))
 
   let decode =
-    let%map () = Syntax.since Stanza.syntax (1, 0)
-    and loc = loc
-    and rules = repeat rule
+    let+ () = Syntax.since Stanza.syntax (1, 0)
+    and+ loc = loc
+    and+ rules = repeat rule
     in
     { loc; rules }
 

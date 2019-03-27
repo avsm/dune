@@ -36,12 +36,12 @@ module Backend = struct
 
       let parse =
         record
-          (let%map loc = loc
-           and runner_libraries = field "runner_libraries" (list (located Lib_name.decode)) ~default:[]
-           and flags = Ordered_set_lang.Unexpanded.field "flags"
-           and generate_runner = field_o "generate_runner" (located Action_dune_lang.decode)
-           and extends = field "extends" (list (located Lib_name.decode)) ~default:[]
-           and file_kind = Stanza.file_kind ()
+          (let+ loc = loc
+           and+ runner_libraries = field "runner_libraries" (list (located Lib_name.decode)) ~default:[]
+           and+ flags = Ordered_set_lang.Unexpanded.field "flags"
+           and+ generate_runner = field_o "generate_runner" (located Action_dune_lang.decode)
+           and+ extends = field "extends" (list (located Lib_name.decode)) ~default:[]
+           and+ file_kind = Stanza.file_kind ()
            in
            { loc
            ; runner_libraries
@@ -73,7 +73,7 @@ module Backend = struct
       ; extends =
           let open Result.O in
           Result.List.map info.extends ~f:(fun ((loc, name) as x) ->
-            resolve x >>= fun lib ->
+            let* lib = resolve x in
             match get ~loc lib with
             | None ->
               Error (Errors.exnf loc "%S is not an %s"
@@ -137,11 +137,11 @@ include Sub_system.Register_end_point(
           ~then_:(loc >>| empty)
           ~else_:
             (record
-               (let%map loc = loc
-                and deps = field "deps" (list Dep_conf.decode) ~default:[]
-                and flags = Ordered_set_lang.Unexpanded.field "flags"
-                and backend = field_o "backend" (located Lib_name.decode)
-                and libraries = field "libraries" (list (located Lib_name.decode)) ~default:[]
+               (let+ loc = loc
+                and+ deps = field "deps" (list Dep_conf.decode) ~default:[]
+                and+ flags = Ordered_set_lang.Unexpanded.field "flags"
+                and+ backend = field_o "backend" (located Lib_name.decode)
+                and+ libraries = field "libraries" (list (located Lib_name.decode)) ~default:[]
                 in
                 { loc
                 ; deps
@@ -197,13 +197,17 @@ include Sub_system.Register_end_point(
 
       let runner_libs =
         let open Result.O in
-        Result.List.concat_map backends
-          ~f:(fun (backend : Backend.t) -> backend.runner_libraries)
-        >>= fun libs ->
-        Lib.DB.find_many ~loc (Scope.libs scope) [Dune_file.Library.best_name lib]
-        >>= fun lib ->
-        Result.List.map info.libraries ~f:(Lib.DB.resolve (Scope.libs scope))
-        >>= fun more_libs ->
+        let* libs =
+          Result.List.concat_map backends
+            ~f:(fun (backend : Backend.t) -> backend.runner_libraries)
+        in
+        let* lib =
+          Lib.DB.find_many ~loc
+            (Scope.libs scope) [Dune_file.Library.best_name lib]
+        in
+        let* more_libs =
+          Result.List.map info.libraries ~f:(Lib.DB.resolve (Scope.libs scope))
+        in
         Lib.closure ~linking:true (lib @ libs @ more_libs)
       in
 
@@ -284,13 +288,10 @@ include Sub_system.Register_end_point(
               (A.run (Ok exe) flags ::
                (Module.Name.Map.values source_modules
                 |> List.concat_map ~f:(fun m ->
-                  [ Module.file m Impl
-                  ; Module.file m Intf
-                  ])
-                |> List.filter_opt
-                |> List.map ~f:(fun fn ->
-                  A.diff ~optional:true
-                    fn (Path.extend_basename fn ~suffix:".corrected"))))))
+                  Module.sources m
+                  |> List.map ~f:(fun fn ->
+                    A.diff ~optional:true
+                      fn (Path.extend_basename fn ~suffix:".corrected")))))))
   end)
 
 let linkme = ()

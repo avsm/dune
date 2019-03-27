@@ -9,9 +9,7 @@ module Mode_conf = Dune_file.Mode_conf
 
 module SC = Super_context
 
-module Gen (P : Install_rules.Params) = struct
-  module Odoc = Odoc.Gen(P)
-
+module Gen (P : sig val sctx : Super_context.t end) = struct
   let sctx = P.sctx
   let ctx = SC.context sctx
 
@@ -162,11 +160,11 @@ module Gen (P : Install_rules.Params) = struct
     let cctx = Compilation_context.for_wrapped_compat cctx wrapped_compat in
     Module_compilation.build_modules cctx ~js_of_ocaml ~dynlink ~dep_graphs
 
-  let build_c_file (lib : Library.t) ~expander ~dir ~includes (loc, src, dst) =
+  let build_c_file (lib : Library.t) ~dir ~expander ~includes (loc, src, dst) =
     let src = C.Source.path src in
+    let c_flags = SC.c_flags sctx ~dir ~expander ~lib in
     SC.add_rule sctx ~loc ~dir
-      (Expander.expand_and_eval_set expander lib.c_flags
-         ~standard:(Build.return (Context.cc_g ctx))
+      (c_flags
        >>>
        Build.run
          (* We have to execute the rule in the library directory as
@@ -181,7 +179,7 @@ module Gen (P : Install_rules.Params) = struct
          ]);
     dst
 
-  let build_cxx_file (lib : Library.t) ~expander ~dir ~includes (loc, src, dst) =
+  let build_cxx_file (lib : Library.t) ~dir ~expander ~includes (loc, src, dst) =
     let src = C.Source.path src in
     let open Arg_spec in
     let output_param =
@@ -190,9 +188,9 @@ module Gen (P : Install_rules.Params) = struct
       else
         [A "-o"; Target dst]
     in
+    let cxx_flags = SC.cxx_flags sctx ~dir ~expander ~lib in
     SC.add_rule sctx ~loc ~dir
-      (Expander.expand_and_eval_set expander lib.cxx_flags
-         ~standard:(Build.return (Context.cc_g ctx))
+      (cxx_flags
        >>>
        Build.run
          (* We have to execute the rule in the library directory as
@@ -200,7 +198,6 @@ module Gen (P : Install_rules.Params) = struct
          ~dir
          (SC.resolve_program ~loc:None ~dir sctx ctx.c_compiler)
          ([ S [A "-I"; Path ctx.stdlib_dir]
-          ; As (SC.cxx_flags sctx)
           ; includes
           ; Dyn (fun cxx_flags -> As cxx_flags)
           ] @ output_param @
@@ -269,11 +266,12 @@ module Gen (P : Install_rules.Params) = struct
     in
     let includes =
       Arg_spec.S
-        [ Hidden_deps h_files
+        [ Hidden_deps (Dep.Set.of_files h_files)
         ; Arg_spec.of_result_map requires ~f:(fun libs ->
             S [ Lib.L.c_include_flags libs ~stdlib_dir:ctx.stdlib_dir
-              ; Hidden_deps (Lib_file_deps.file_deps libs
-                               ~groups:[Lib_file_deps.Group.Header])
+              ; Hidden_deps (
+                  Lib_file_deps.deps libs
+                    ~groups:[Lib_file_deps.Group.Header])
               ])
         ]
     in
@@ -281,7 +279,7 @@ module Gen (P : Install_rules.Params) = struct
       String.Map.to_list files
       |> List.map ~f:(fun (obj, (loc, src)) ->
         let dst = Path.relative dir (obj ^ ctx.ext_obj) in
-        build_x lib ~expander ~dir ~includes (loc, src, dst)
+        build_x lib ~dir ~expander ~includes (loc, src, dst)
       )
     in
     let { C.Kind.Dict. c; cxx } = C.Sources.split_by_kind c_sources in
@@ -505,7 +503,7 @@ module Gen (P : Install_rules.Params) = struct
         ~vlib_dep_graphs ~expander
     );
 
-    Odoc.setup_library_odoc_rules lib ~requires:requires_compile
+    Odoc.setup_library_odoc_rules sctx lib ~requires:requires_compile
       ~modules ~dep_graphs ~scope;
 
     let flags =

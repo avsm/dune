@@ -20,6 +20,8 @@ module Lib = struct
     ; sub_systems      : 'sub_system Sub_system_name.Map.t
     ; virtual_         : bool
     ; implements       : (Loc.t * Lib_name.t) option
+    ; variant          : Variant.t option
+    ; default_implementation  : (Loc.t * Lib_name.t)  option
     ; modules          : Lib_modules.t option
     ; main_module_name : Module.Name.t option
     ; requires         : (Loc.t * Lib_name.t) list
@@ -29,9 +31,15 @@ module Lib = struct
 
   let make ~loc ~kind ~name ~synopsis ~archives ~plugins ~foreign_objects
         ~foreign_archives ~jsoo_runtime ~main_module_name ~sub_systems
-        ~requires ~ppx_runtime_deps ~implements ~virtual_ ~modules ~modes
+        ~requires ~ppx_runtime_deps ~implements ~variant
+        ~default_implementation ~virtual_ ~modules ~modes
         ~version ~orig_src_dir ~dir =
-    let map_path p = Path.relative dir (Path.basename p) in
+    let map_path p =
+      if Path.is_managed p then
+        Path.relative dir (Path.basename p)
+      else
+        p
+    in
     let map_list = List.map ~f:map_path in
     let map_mode = Mode.Dict.map ~f:map_list in
     { loc
@@ -48,6 +56,8 @@ module Lib = struct
     ; requires
     ; ppx_runtime_deps
     ; implements
+    ; variant
+    ; default_implementation
     ; version
     ; dir
     ; orig_src_dir
@@ -70,7 +80,8 @@ module Lib = struct
         { loc = _ ; kind ; synopsis ; name ; archives ; plugins
         ; foreign_objects ; foreign_archives ; jsoo_runtime ; requires
         ; ppx_runtime_deps ; sub_systems ; virtual_
-        ; implements ; main_module_name ; version = _; dir = _; orig_src_dir
+        ; implements ; variant ; default_implementation
+        ; main_module_name ; version = _; dir = _; orig_src_dir
         ; modules ; modes
         } =
     let open Dune_lang.Encoder in
@@ -94,6 +105,9 @@ module Lib = struct
     ; libs "requires" requires
     ; libs "ppx_runtime_deps" ppx_runtime_deps
     ; field_o "implements" (no_loc Lib_name.encode) implements
+    ; field_o "variant" Variant.encode variant
+    ; field_o "default_implementation"
+        (no_loc Lib_name.encode) default_implementation
     ; field_o "main_module_name" Module.Name.encode main_module_name
     ; field_l "modes" sexp (Mode.Dict.Set.encode modes)
     ; field_l "modules" sexp
@@ -116,23 +130,26 @@ module Lib = struct
     record (
       field_o "main_module_name" Module.Name.decode >>= fun main_module_name ->
       field_o "implements" (located Lib_name.decode) >>= fun implements ->
+      field_o "variant" Variant.decode >>= fun variant ->
+      field_o "default_implementation" (located Lib_name.decode)
+      >>= fun default_implementation ->
       field "name" Lib_name.decode >>= fun name ->
       let dir = Path.append_local base (dir_of_name name) in
-      let%map synopsis = field_o "synopsis" string
-      and loc = loc
-      and modes = field_l "modes" Mode.decode
-      and kind = field "kind" Lib_kind.decode
-      and archives = mode_paths "archives"
-      and plugins = mode_paths "plugins"
-      and foreign_objects = paths "foreign_objects"
-      and foreign_archives = mode_paths "foreign_archives"
-      and jsoo_runtime = paths "jsoo_runtime"
-      and requires = libs "requires"
-      and ppx_runtime_deps = libs "ppx_runtime_deps"
-      and virtual_ = field_b "virtual"
-      and sub_systems = Sub_system_info.record_parser ()
-      and orig_src_dir = field_o "orig_src_dir" path
-      and modules = field_o "modules" (Lib_modules.decode
+      let+ synopsis = field_o "synopsis" string
+      and+ loc = loc
+      and+ modes = field_l "modes" Mode.decode
+      and+ kind = field "kind" Lib_kind.decode
+      and+ archives = mode_paths "archives"
+      and+ plugins = mode_paths "plugins"
+      and+ foreign_objects = paths "foreign_objects"
+      and+ foreign_archives = mode_paths "foreign_archives"
+      and+ jsoo_runtime = paths "jsoo_runtime"
+      and+ requires = libs "requires"
+      and+ ppx_runtime_deps = libs "ppx_runtime_deps"
+      and+ virtual_ = field_b "virtual"
+      and+ sub_systems = Sub_system_info.record_parser ()
+      and+ orig_src_dir = field_o "orig_src_dir" path
+      and+ modules = field_o "modules" (Lib_modules.decode
                          ~implements:(Option.is_some implements) ~dir)
       in
       let modes = Mode.Dict.Set.of_list modes in
@@ -148,6 +165,8 @@ module Lib = struct
       ; requires
       ; ppx_runtime_deps
       ; implements
+      ; variant
+      ; default_implementation
       ; sub_systems
       ; main_module_name
       ; virtual_
@@ -176,6 +195,8 @@ module Lib = struct
   let foreign_archives t = t.foreign_archives
   let requires t = t.requires
   let implements t = t.implements
+  let variant t = t.variant
+  let default_implementation t = t.default_implementation
   let modes t = t.modes
 
   let compare_name x y = Lib_name.compare x.name y.name
@@ -191,9 +212,9 @@ type 'sub_system t =
 
 let decode ~dir =
   let open Dune_lang.Decoder in
-  let%map name = field "name" Package.Name.decode
-  and version = field_o "version" string
-  and libs = multi_field "library" (Lib.decode ~base:dir)
+  let+ name = field "name" Package.Name.decode
+  and+ version = field_o "version" string
+  and+ libs = multi_field "library" (Lib.decode ~base:dir)
   in
   { name
   ; version
@@ -224,7 +245,10 @@ let encode ~dune_version { libs ; name ; version; dir } =
     match version with
     | None -> sexp
     | Some version ->
-      sexp @ [List [Dune_lang.atom "version"; Dune_lang.atom version]]
+      sexp @ [ List [ Dune_lang.atom "version"
+                    ; Dune_lang.atom_or_quoted_string version
+                    ]
+             ]
   in
   let libs =
     List.map libs ~f:(fun lib ->

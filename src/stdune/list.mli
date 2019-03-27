@@ -53,3 +53,9 @@ val nth : 'a t -> int -> 'a option
 val physically_equal : 'a t -> 'a t -> bool
 
 val init : int -> f:(int -> 'a) -> 'a list
+
+val hd_opt : 'a t -> 'a option
+
+val equal : ('a -> 'a -> bool) -> 'a t -> 'a t -> bool
+
+val hash : ('a -> int) -> 'a list -> int

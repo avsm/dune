@@ -15,7 +15,6 @@ type t =
   ; packages                         : Package.t Package.Name.Map.t
   ; file_tree                        : File_tree.t
   ; artifacts                        : Artifacts.t
-  ; cxx_flags                        : string list
   ; expander                         : Expander.t
   ; chdir                            : (Action.t, Action.t) Build.t
   ; host                             : t option
@@ -36,10 +35,14 @@ let packages t = t.packages
 let libs_by_package t = t.libs_by_package
 let artifacts t = t.artifacts
 let file_tree t = t.file_tree
-let cxx_flags t = t.cxx_flags
 let build_dir t = t.context.build_dir
 let profile t = t.context.profile
 let external_lib_deps_mode t = t.external_lib_deps_mode
+
+let equal = ((==) : t -> t -> bool)
+let hash t = Context.hash t.context
+let to_dyn t = Context.to_dyn t.context
+let to_sexp t = Context.to_sexp t.context
 
 let host t = Option.value t.host ~default:t
 
@@ -66,6 +69,8 @@ module External_env = Env
 
 module Env : sig
   val ocaml_flags : t -> dir:Path.t -> Ocaml_flags.t
+  val c_flags : t -> dir:Path.t -> (unit, string list) Build.t
+  val cxx_flags : t -> dir:Path.t -> (unit, string list) Build.t
   val external_ : t -> dir:Path.t -> External_env.t
   val artifacts_host : t -> dir:Path.t -> Artifacts.t
   val expander : t -> dir:Path.t -> Expander.t
@@ -73,8 +78,8 @@ module Env : sig
 end = struct
   let get_env_stanza t ~dir =
     let open Option.O in
-    stanzas_in t ~dir >>= fun x ->
-    List.find_map x.data ~f:(function
+    let* stanza = stanzas_in t ~dir in
+    List.find_map stanza.data ~f:(function
       | Dune_env.T config -> Some config
       | _ -> None)
 
@@ -146,6 +151,22 @@ end = struct
   let ocaml_flags t ~dir =
     Env_node.ocaml_flags (get t ~dir)
       ~profile:(profile t) ~expander:(expander t ~dir)
+
+  let c_flags t ~dir =
+    let ctx = t.context in
+    let default_context_flags = ctx.ocamlc_cflags in
+    Env_node.c_flags (get t ~dir)
+      ~profile:(profile t) ~expander:(expander t ~dir)
+      ~default_context_flags
+
+  let cxx_flags t ~dir =
+    let ctx = t.context in
+    let default_context_flags =
+      List.filter ctx.ocamlc_cflags
+        ~f:(fun s -> not (String.is_prefix s ~prefix:"-std=")) in
+    Env_node.cxx_flags (get t ~dir)
+      ~profile:(profile t) ~expander:(expander t ~dir)
+      ~default_context_flags
 end
 
 let expander = Env.expander
@@ -209,12 +230,13 @@ let partial_expand sctx ~dep_kind ~targets_written_by_user ~map_exe
       ~expander t =
   let acc = Expander.Resolved_forms.empty () in
   let read_package = Pkg_version.read sctx in
+  let c_flags = Env.c_flags sctx in
+  let cxx_flags = Env.cxx_flags sctx in
   let expander =
     Expander.with_record_deps expander  acc ~dep_kind ~targets_written_by_user
-      ~map_exe ~read_package in
+      ~map_exe ~read_package ~c_flags ~cxx_flags in
   let partial = Action_unexpanded.partial_expand t ~expander ~map_exe in
   (partial, acc)
-
 
 let ocaml_flags t ~dir (x : Buildable.t) =
   let expander = Env.expander t ~dir in
@@ -225,10 +247,51 @@ let ocaml_flags t ~dir (x : Buildable.t) =
     ~default:(Env.ocaml_flags t ~dir)
     ~eval:(Expander.expand_and_eval_set expander)
 
+let c_flags t ~dir ~expander ~(lib : Library.t) =
+  let ccg = Context.cc_g t.context in
+  let eval = Expander.expand_and_eval_set expander in
+  let flags = lib.c_flags in
+  let default = Env.c_flags t ~dir in
+  Build.memoize "c flags"
+    begin
+      if Ordered_set_lang.Unexpanded.has_special_forms flags then
+        let c = eval flags ~standard:default in
+        let open Build.O in (c >>^ fun l -> l @ ccg)
+      else
+        eval flags ~standard:(Build.return ccg)
+    end
+
+let cxx_flags t ~dir ~expander ~(lib : Library.t) =
+  let ccg = Context.cc_g t.context in
+  let eval = Expander.expand_and_eval_set expander in
+  let flags = lib.cxx_flags in
+  let default = Env.cxx_flags t ~dir in
+  Build.memoize "cxx flags"
+    begin
+      if Ordered_set_lang.Unexpanded.has_special_forms flags then
+        let c = eval flags ~standard:default in
+        let open Build.O in (c >>^ fun l -> l @ ccg)
+      else
+        eval flags ~standard:(Build.return ccg)
+    end
+
 let local_binaries t ~dir = Env.local_binaries t ~dir
 
 let dump_env t ~dir =
-  Ocaml_flags.dump (Env.ocaml_flags t ~dir)
+  let open Build.O in
+  let o_dump = Ocaml_flags.dump (Env.ocaml_flags t ~dir) in
+  let c_flags = Env.c_flags t ~dir in
+  let cxx_flags = Env.cxx_flags t ~dir in
+  let c_dump =
+    Build.fanout  c_flags cxx_flags
+    >>^ fun (c_flags, cxx_flags) ->
+    List.map ~f:Dune_lang.Encoder.(pair string (list string))
+      [ "c_flags", c_flags
+      ; "cxx_flags", cxx_flags
+      ]
+  in (* combine o_dump and c_dump *)
+  (o_dump &&& c_dump) >>^ (fun (x, y) -> x @ y)
+
 
 let resolve_program t ~dir ?hint ~loc bin =
   let artifacts = Env.artifacts_host t ~dir in
@@ -269,12 +332,14 @@ let create
     List.map stanzas
       ~f:(fun { Dune_load.Dune_file. dir; project; stanzas; kind } ->
         let ctx_dir = Path.append context.build_dir dir in
+        let dune_version = Dune_project.dune_version project in
         { Dir_with_dune.
           src_dir = dir
         ; ctx_dir
         ; data = stanzas
         ; scope = Scope.DB.find_by_name scopes (Dune_project.name project)
         ; kind
+        ; dune_version
         })
   in
   let stanzas_per_dir =
@@ -283,10 +348,6 @@ let create
     |> Path.Map.of_list_exn
   in
   let artifacts = Artifacts.create context ~public_libs in
-  let cxx_flags =
-    List.filter context.ocamlc_cflags
-      ~f:(fun s -> not (String.is_prefix s ~prefix:"-std="))
-  in
   let default_env = lazy (
     let make ~inherit_from ~config =
       Env_node.make
@@ -318,7 +379,6 @@ let create
       ~context
       ~artifacts
       ~artifacts_host
-      ~cxx_flags
   in
   let dir_status_db = Dir_status.DB.make file_tree ~stanzas_per_dir in
   { context
@@ -332,7 +392,6 @@ let create
   ; packages
   ; file_tree
   ; artifacts
-  ; cxx_flags
   ; chdir = Build.arr (fun (action : Action.t) ->
       match action with
       | Chdir _ -> action
@@ -411,13 +470,14 @@ module Deps = struct
     | Glob_files s -> begin
         let loc = String_with_vars.loc s in
         let path = Expander.expand_path expander s in
-        match Glob_lexer.parse_string (Path.basename path) with
-        | Ok re ->
-          let dir = Path.parent_exn path in
-          Build.paths_glob ~loc ~dir (Re.compile re)
-          >>^ Path.Set.to_list
-        | Error (_pos, msg) ->
-          Errors.fail (String_with_vars.loc s) "invalid glob: %s" msg
+        let pred =
+          Glob.of_string_exn loc (Path.basename path)
+          |> Glob.to_pred
+        in
+        let dir = Path.parent_exn path in
+        File_selector.create ~dir pred
+        |> Build.paths_matching ~loc
+        >>^ Path.Set.to_list
       end
     | Source_tree s ->
       let path = Expander.expand_path expander s in
@@ -428,7 +488,7 @@ module Deps = struct
       Alias.dep (Alias.package_install ~context:t.context ~pkg)
       >>^ fun () -> []
     | Universe ->
-      Build.path Build_system.universe_file
+      Build.dep Dep.universe
       >>^ fun () -> []
     | Env_var var_sw ->
       let var = Expander.expand_str expander var_sw in
@@ -437,9 +497,12 @@ module Deps = struct
 
   let make_interpreter ~f t ~expander l =
     let forms = Expander.Resolved_forms.empty () in
+    let c_flags = Env.c_flags t in
+    let cxx_flags = Env.cxx_flags t in
     let expander =
       Expander.with_record_no_ddeps expander forms
         ~dep_kind:Optional ~map_exe:Fn.id
+        ~c_flags ~cxx_flags
     in
     let deps =
       List.map l ~f:(f t expander)
@@ -501,14 +564,14 @@ module Action = struct
     begin match (targets_written_by_user : Expander.Targets.t) with
     | Static _ | Infer -> ()
     | Forbidden context ->
-         match U.Infer.unexpanded_targets t with
-         | [] -> ()
-         | x :: _ ->
-           let loc = String_with_vars.loc x in
-           Errors.warn loc
-             "%s must not have targets, this target will be ignored.\n\
-              This will become an error in the future."
-             (String.capitalize context)
+      match U.Infer.unexpanded_targets t with
+      | [] -> ()
+      | x :: _ ->
+        let loc = String_with_vars.loc x in
+        Errors.warn loc
+          "%s must not have targets, this target will be ignored.\n\
+           This will become an error in the future."
+          (String.capitalize context)
     end;
     let t, forms =
       partial_expand sctx ~expander ~dep_kind

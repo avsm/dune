@@ -22,11 +22,11 @@ let make ?(quoted=false) loc part =
 let make_text ?quoted loc s =
   make ?quoted loc (Text s)
 
-let make_var ?quoted loc name =
+let make_var ?quoted loc ?payload name =
   let var =
     { loc
     ; name
-    ; payload = None
+    ; payload
     ; syntax = Percent
   }
   in
@@ -130,8 +130,8 @@ let decode =
     | List (loc, _) -> Dune_lang.Decoder.of_sexp_error loc "Unexpected list"
   in
   let template_parser = Stanza.Decoder.switch_file_kind ~jbuild ~dune in
-  let%map syntax_version = Syntax.get_exn Stanza.syntax
-  and template = template_parser
+  let+ syntax_version = Syntax.get_exn Stanza.syntax
+  and+ template = template_parser
   in
   {template; syntax_version}
 
@@ -386,6 +386,10 @@ module Upgrade_var = struct
       ; "workspace_root" , Keep
       ; "context_name"   , Keep
       ; "ROOT"           , Renamed_to "workspace_root"
+      ; "corrected-suffix", Keep
+      ; "library-name"   , Keep
+      ; "impl-files"     , Keep
+      ; "intf-files"     , Keep
       ]
     in
     String.Map.of_list_exn

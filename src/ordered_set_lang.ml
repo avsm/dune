@@ -64,7 +64,7 @@ module Parse = struct
       peek >>= function
       | None -> return (Union (List.rev acc))
       | Some (Atom (_, A "\\")) ->
-        junk >>> many [] kind >>| fun to_remove ->
+        let+ to_remove = junk >>> many [] kind in
         Diff (Union (List.rev acc), to_remove)
       | Some _ ->
         one kind >>= fun x ->
@@ -92,8 +92,8 @@ end
 
 let decode =
   let open Stanza.Decoder in
-  let%map context = get_all
-  and (loc, ast) =
+  let+ context = get_all
+  and+ (loc, ast) =
     located (Parse.without_include
                ~elt:(plain_string (fun ~loc s -> Ast.Element (loc, s))))
   in
@@ -250,8 +250,8 @@ module Unexpanded = struct
   type t = ast generic
   let decode : t Dune_lang.Decoder.t =
     let open Stanza.Decoder in
-    let%map context = get_all
-    and (loc, ast) =
+    let+ context = get_all
+    and+ (loc, ast) =
       located (
         Parse.with_include
           ~elt:(String_with_vars.decode >>| fun s -> Ast.Element s))

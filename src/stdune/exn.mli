@@ -1,7 +1,7 @@
 (** Exceptions *)
 
 (** An programming error, that should be reported upstream. The error message
-    shouldn't try to be developer friendly rather than user friendly. *)
+    should try to be developer friendly rather than user friendly. *)
 exception Code_error of Sexp.t
 
 
@@ -35,3 +35,7 @@ val protectx : 'a -> f:('a -> 'b) -> finally:('a -> unit) -> 'b
 val pp_uncaught : backtrace:string -> Format.formatter -> t -> unit
 
 val raise_with_backtrace: exn -> Printexc.raw_backtrace -> _
+
+val equal : t -> t -> bool
+
+val hash : t -> int

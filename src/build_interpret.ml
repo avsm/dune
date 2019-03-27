@@ -18,37 +18,12 @@ module Target = struct
       Path.Set.add acc (path t))
 end
 
-type file_kind = Reg | Dir
-
-let inspect_path file_tree path =
-  match Path.drop_build_context path with
-  | None ->
-    if not (Path.exists path) then
-      None
-    else if Path.is_directory path then
-      Some Dir
-    else
-      Some Reg
-  | Some path ->
-    match File_tree.find_dir file_tree path with
-    | Some _ ->
-      Some Dir
-    | None ->
-      if Path.is_root path then
-        Some Dir
-      else if File_tree.file_exists file_tree
-                (Path.parent_exn path)
-                (Path.basename path) then
-        Some Reg
-      else
-        None
-
 let no_targets_allowed () =
   Exn.code_error "No targets allowed under a [Build.lazy_no_targets] \
                   or [Build.if_file_exists]" []
 [@@inline never]
 
-let static_deps t ~all_targets ~file_tree =
+let static_deps t ~all_targets =
   let rec loop : type a b. (a, b) t -> Static_deps.t -> bool -> Static_deps.t
     = fun t acc targets_allowed ->
     match t with
@@ -60,34 +35,12 @@ let static_deps t ~all_targets ~file_tree =
     | Second t -> loop t acc targets_allowed
     | Split (a, b) -> loop a (loop b acc targets_allowed) targets_allowed
     | Fanout (a, b) -> loop a (loop b acc targets_allowed) targets_allowed
-    | Paths fns ->
-      Static_deps.add_action_paths acc fns
+    | Deps deps ->
+      Static_deps.add_action_deps acc deps
     | Paths_for_rule fns ->
       Static_deps.add_rule_paths acc fns
-    | Paths_glob state -> begin
-        match !state with
-        | G_evaluated l ->
-          Static_deps.add_action_paths acc l
-        | G_unevaluated (loc, dir, f) ->
-          let targets = all_targets ~dir in
-          let result = Path.Set.filter targets ~f in
-          if Path.Set.is_empty result then begin
-            match inspect_path file_tree dir with
-            | None ->
-              Errors.warn loc "Directory %s doesn't exist."
-                (Path.to_string_maybe_quoted
-                   (Path.drop_optional_build_context dir))
-            | Some Reg ->
-              Errors.warn loc "%s is not a directory."
-                (Path.to_string_maybe_quoted
-                   (Path.drop_optional_build_context dir))
-            | Some Dir ->
-              (* diml: we should probably warn in this case as well *)
-              ()
-          end;
-          state := G_evaluated result;
-          Static_deps.add_action_paths acc result
-      end
+    | Paths_glob g ->
+      Static_deps.add_action_dep acc (Dep.glob g)
     | If_file_exists (p, state) -> begin
         match !state with
         | Decided (_, t) -> loop t acc false
@@ -103,6 +56,7 @@ let static_deps t ~all_targets ~file_tree =
           end
       end
     | Dyn_paths t -> loop t acc targets_allowed
+    | Dyn_deps t -> loop t acc targets_allowed
     | Vpath (Vspec.T (p, _)) ->
       Static_deps.add_rule_path acc p
     | Contents p -> Static_deps.add_rule_path acc p
@@ -112,8 +66,6 @@ let static_deps t ~all_targets ~file_tree =
     | Memo m -> loop m.t acc targets_allowed
     | Catch (t, _) -> loop t acc targets_allowed
     | Lazy_no_targets t -> loop (Lazy.force t) acc false
-    | Env_var var ->
-      Static_deps.add_action_env_var acc var
   in
   loop (Build.repr t) Static_deps.empty true
 
@@ -129,11 +81,12 @@ let lib_deps =
       | Second t -> loop t acc
       | Split (a, b) -> loop a (loop b acc)
       | Fanout (a, b) -> loop a (loop b acc)
-      | Paths _ -> acc
       | Paths_for_rule _ -> acc
       | Vpath _ -> acc
       | Paths_glob _ -> acc
+      | Deps _ -> acc
       | Dyn_paths t -> loop t acc
+      | Dyn_deps t -> loop t acc
       | Contents _ -> acc
       | Lines_of _ -> acc
       | Record_lib_deps deps -> Lib_deps_info.merge deps acc
@@ -143,7 +96,6 @@ let lib_deps =
       | Memo m -> loop m.t acc
       | Catch (t, _) -> loop t acc
       | Lazy_no_targets t -> loop (Lazy.force t) acc
-      | Env_var _ -> acc
   in
   fun t -> loop (Build.repr t) Lib_name.Map.empty
 
@@ -159,11 +111,12 @@ let targets =
     | Second t -> loop t acc
     | Split (a, b) -> loop a (loop b acc)
     | Fanout (a, b) -> loop a (loop b acc)
-    | Paths _ -> acc
     | Paths_for_rule _ -> acc
     | Vpath _ -> acc
     | Paths_glob _ -> acc
+    | Deps _ -> acc
     | Dyn_paths t -> loop t acc
+    | Dyn_deps t -> loop t acc
     | Contents _ -> acc
     | Lines_of _ -> acc
     | Record_lib_deps _ -> acc
@@ -187,7 +140,6 @@ let targets =
     | Memo m -> loop m.t acc
     | Catch (t, _) -> loop t acc
     | Lazy_no_targets _ -> acc
-    | Env_var _ -> acc
   in
   fun t -> loop (Build.repr t) []
 

@@ -111,7 +111,7 @@ module Make(Key : Comparable.S) : S with type key = Key.t = struct
   let of_list_exn l =
     match of_list l with
     | Ok    x -> x
-    | Error _ -> invalid_arg "Map.of_list_exn"
+    | Error _ -> Exn.code_error "Map.of_list_exn" []
 
   let of_list_reduce l ~f =
     List.fold_left l ~init:empty ~f:(fun acc (key, data) ->
@@ -144,7 +144,24 @@ module Make(Key : Comparable.S) : S with type key = Key.t = struct
 
   let superpose a b =
     union a b ~f:(fun _ _ y -> Some y)
+
+  module Multi = struct
+    type nonrec 'a t = 'a list t
+
+    let rev_union m1 m2 =
+      union m1 m2 ~f:(fun _ l1 l2 -> Some (List.rev_append l1 l2))
+
+    let cons t k x =
+      update t k ~f:(function
+        | None -> Some [x]
+        | Some xs -> Some (x :: xs))
+
+    let find t k = Option.value (find t k) ~default:[]
+  end
 end
 
+let to_dyn to_list f g t =
+  Dyn.Map (List.map ~f:(fun (k, v) -> (f k, g v)) (to_list t))
+
 let to_sexp to_list f g t =
-  Sexp.Encoder.(list (pair f g)) (to_list t)
+  Dyn.to_sexp (to_dyn to_list (Dyn.Encoder.via_sexp f) (Dyn.Encoder.via_sexp g) t)

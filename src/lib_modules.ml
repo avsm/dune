@@ -163,8 +163,9 @@ let installable_modules t =
 let version_installed t ~install_dir:(dir) =
   let obj_dir = Obj_dir.make_external ~dir in
   let set = Module.set_obj_dir ~obj_dir in
-  { t with alias_module = Option.map ~f:set t.alias_module
-         ; modules = Module.Name.Map.map ~f:set t.modules;
+  { t with
+    alias_module = Option.map ~f:set t.alias_module
+  ; modules = Module.Name.Map.map ~f:set t.modules;
   }
 
 let lib_interface_module t =
@@ -230,11 +231,11 @@ let encode
 let decode ~implements ~dir =
   let open Stanza.Decoder in
   fields (
-    let%map alias_module = field_o "alias_module" (Module.decode ~dir)
-    and main_module_name = field_o "main_module_name" Module.Name.decode
-    and modules =
+    let+ alias_module = field_o "alias_module" (Module.decode ~dir)
+    and+ main_module_name = field_o "main_module_name" Module.Name.decode
+    and+ modules =
       field ~default:[] "modules" (list (enter (Module.decode ~dir)))
-    and wrapped = field "wrapped" Wrapped.decode
+    and+ wrapped = field "wrapped" Wrapped.decode
     in
     let modules =
       modules

@@ -15,11 +15,15 @@ module Version = struct
 
   module Infix = Comparable.Operators(T)
 
+  let equal = Infix.equal
+
   let to_string (a, b) = sprintf "%u.%u" a b
 
   let pp fmt t = Format.fprintf fmt "%s" (to_string t)
 
   let to_sexp t = Sexp.Atom (to_string t)
+
+  let hash = Hashtbl.hash
 
   let encode t = Dune_lang.Encoder.string (to_string t)
 
@@ -101,6 +105,15 @@ module Error = struct
        | Some s -> ".\n" ^ s)
 end
 
+module Warning = struct
+  let deprecated_in loc t ?repl ver ~what =
+    Errors.warn loc "%s was deprecated in version %s of %s%s"
+      what (Version.to_string ver) t.desc
+      (match repl with
+       | None -> ""
+       | Some s -> ".\n" ^ s)
+end
+
 
 let create ~name ~desc supported_versions =
   { name
@@ -142,7 +155,7 @@ let get_exn t =
   get t.key >>= function
   | Some x -> return x
   | None ->
-    get_all >>| fun context ->
+    let+ context = get_all in
     Exn.code_error "Syntax identifier is unset"
       [ "name", Sexp.Encoder.string t.name
       ; "supported_versions", Supported_versions.to_sexp t.supported_versions
@@ -150,7 +163,7 @@ let get_exn t =
       ]
 
 let desc () =
-  kind >>| fun kind ->
+  let+ kind = kind in
   match kind with
   | Values (loc, None) -> (loc, "This syntax")
   | Fields (loc, None) -> (loc, "This field")
@@ -165,6 +178,16 @@ let deleted_in t ver =
   else begin
     desc () >>= fun (loc, what) ->
     Error.deleted_in loc t ver ~what
+  end
+
+let deprecated_in t ver =
+  let open Version.Infix in
+  get_exn t >>= fun current_ver ->
+  if current_ver < ver then
+    return ()
+  else begin
+    let+ (loc, what) = desc () in
+    Warning.deprecated_in loc t ver ~what;
   end
 
 let renamed_in t ver ~to_ =

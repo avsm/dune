@@ -90,17 +90,12 @@ end = struct
         (Digest.to_string y)
 end
 
-let pped_path path ~suffix =
-  (* We need to insert the suffix before the extension as some tools
-     inspect the extension *)
-  let base, ext = Path.split_extension path in
-  Path.extend_basename base ~suffix:(suffix ^ ext)
-
 let pped_module m ~f =
-  Module.map_files m ~f:(fun kind file ->
-    let pp_path = pped_path file.path ~suffix:".pp" in
-    f kind file.path pp_path;
-    { file with path = pp_path })
+  let pped = Module.pped m in
+  Module.iter m ~f:(fun kind file ->
+    let pp_path = Option.value_exn (Module.file pped kind) in
+    f kind file.path pp_path);
+  pped
 
 module Driver = struct
   module M = struct
@@ -132,18 +127,18 @@ module Driver = struct
 
       let parse =
         record
-          (let%map loc = loc
-           and flags = Ordered_set_lang.Unexpanded.field "flags"
-           and as_ppx_flags =
+          (let+ loc = loc
+           and+ flags = Ordered_set_lang.Unexpanded.field "flags"
+           and+ as_ppx_flags =
              Ordered_set_lang.Unexpanded.field "as_ppx_flags"
                ~check:(Syntax.since syntax (1, 2))
                ~default:(Ordered_set_lang.Unexpanded.of_strings ["--as-ppx"]
                            ~pos:__POS__)
-           and lint_flags = Ordered_set_lang.Unexpanded.field "lint_flags"
-           and main = field "main" string
-           and replaces =
+           and+ lint_flags = Ordered_set_lang.Unexpanded.field "lint_flags"
+           and+ main = field "main" string
+           and+ replaces =
              field "replaces" (list (located (Lib_name.decode))) ~default:[]
-           and file_kind = Stanza.file_kind ()
+           and+ file_kind = Stanza.file_kind ()
            in
            { loc
            ; flags
@@ -178,7 +173,7 @@ module Driver = struct
       ; replaces =
           let open Result.O in
           Result.List.map info.replaces ~f:(fun ((loc, name) as x) ->
-            resolve x >>= fun lib ->
+            let* lib = resolve x in
             match get ~loc lib with
             | None ->
               Error (Errors.exnf loc "%a is not a %s"
@@ -365,8 +360,9 @@ let build_ppx_driver sctx ~dep_kind ~target ~dir_kind ~pps ~pp_names =
         let pp_names = driver_name :: List.map pps ~f:Lib.name in
         let pps =
           let open Result.O in
-          Lib.DB.resolve_pps (SC.public_libs sctx) [(Loc.none, driver_name)]
-          >>| fun driver ->
+          let+ driver =
+            Lib.DB.resolve_pps (SC.public_libs sctx) [(Loc.none, driver_name)]
+          in
           driver @ pps
         in
         (Some driver, pps, pp_names)
@@ -382,8 +378,9 @@ let build_ppx_driver sctx ~dep_kind ~target ~dir_kind ~pps ~pp_names =
        >>= fun pps ->
        match jbuild_driver with
        | None ->
-         Driver.select pps ~loc:(Dot_ppx (target, pp_names))
-         >>| fun driver ->
+         let+ driver =
+          Driver.select pps ~loc:(Dot_ppx (target, pp_names))
+         in
          (driver, pps)
        | Some driver ->
          Ok (driver, pps))
@@ -483,16 +480,16 @@ let get_compat_ppx_exe sctx ~name ~kind =
 
 let get_ppx_driver sctx ~loc ~scope ~dir_kind pps =
   let open Result.O in
-  Lib.DB.resolve_pps (Scope.libs scope) pps
-  >>= fun libs ->
-  (match (dir_kind : Dune_lang.Syntax.t) with
-   | Dune ->
-     Lib.closure libs ~linking:true
-     >>=
-     Driver.select ~loc:(User_file (loc, pps))
-   | Jbuild ->
-     Ok (Jbuild_driver.get_driver pps))
-  >>| fun driver ->
+  let* libs = Lib.DB.resolve_pps (Scope.libs scope) pps in
+  let+ driver =
+    match (dir_kind : Dune_lang.Syntax.t) with
+    | Dune ->
+      Lib.closure libs ~linking:true
+      >>=
+      Driver.select ~loc:(User_file (loc, pps))
+    | Jbuild ->
+      Ok (Jbuild_driver.get_driver pps)
+  in
   (ppx_driver_exe (SC.host sctx) libs ~dir_kind, driver)
 
 let workspace_root_var = String_with_vars.virt_var __POS__ "workspace_root"
@@ -518,27 +515,15 @@ let setup_reason_rules sctx (m : Module.t) =
       ]
       ~stdout_to:target
   in
-  Module.map_files m ~f:(fun _ f ->
+  let ml = Module.ml_source m in
+  Module.iter m ~f:(fun kind f ->
     match f.syntax with
-    | OCaml  -> f
+    | OCaml  ->
+      ()
     | Reason ->
-      let path =
-        let base, ext = Path.split_extension f.path in
-        let suffix =
-          match ext with
-          | ".re"  -> ".re.ml"
-          | ".rei" -> ".re.mli"
-          | _     ->
-            Errors.fail
-              (Loc.in_file (Path.drop_build_context_exn f.path))
-              "Unknown file extension for reason source file: %S"
-              ext
-        in
-        Path.extend_basename base ~suffix
-      in
-      let ml = Module.File.make OCaml path in
-      SC.add_rule sctx ~dir:ctx.build_dir (rule f.path ml.path);
-      ml)
+      let ml = Option.value_exn (Module.file ml kind) in
+      SC.add_rule sctx ~dir:ctx.build_dir (rule f.path ml));
+  ml
 
 let promote_correction fn build ~suffix =
   Build.progn
@@ -548,6 +533,32 @@ let promote_correction fn build ~suffix =
            fn
            (Path.extend_basename fn ~suffix))
     ]
+
+let action_for_pp sctx ~dep_kind ~loc ~expander ~action ~src ~target =
+  let action = Action_unexpanded.Chdir (workspace_root_var, action) in
+  let bindings = Pform.Map.input_file src in
+  let expander = Expander.add_bindings expander ~bindings in
+  let targets = Expander.Targets.Forbidden "preprocessing actions" in
+  let targets_dir =
+    Path.parent_exn (Option.value ~default:src target) in
+  Build.path src
+  >>^ (fun _ -> Bindings.empty)
+  >>>
+  SC.Action.run sctx
+    action
+    ~loc
+    ~expander
+    ~dep_kind
+    ~targets
+    ~targets_dir
+  |> (fun action ->
+    match target with
+    | None -> action
+    | Some dst -> action >>> Build.action_dyn () ~targets:[dst])
+  >>^ fun action ->
+  match target with
+  | None -> action
+  | Some dst -> Action.with_stdout_to dst action
 
 let lint_module sctx ~dir ~expander ~dep_kind ~lint ~lib_name ~scope ~dir_kind =
   Staged.stage (
@@ -560,23 +571,16 @@ let lint_module sctx ~dir ~expander ~dep_kind ~lint ~lib_name ~scope ~dir_kind =
       Per_module.map lint ~f:(function
         | Preprocess.No_preprocessing ->
           (fun ~source:_ ~ast:_ -> ())
+        | Future_syntax loc ->
+          Errors.fail loc
+            "'compat' cannot be used as a linter"
         | Action (loc, action) ->
           (fun ~source ~ast:_ ->
-             let action = Action_unexpanded.Chdir
-                            (workspace_root_var, action) in
              Module.iter source ~f:(fun _ (src : Module.File.t) ->
-               let bindings = Pform.Map.input_file src.path in
-               let expander = Expander.add_bindings expander ~bindings in
-               add_alias src.path ~loc:(Some loc)
-                 (Build.path src.path
-                  >>^ (fun _ -> Bindings.empty)
-                  >>> SC.Action.run sctx
-                        action
-                        ~loc
-                        ~expander
-                        ~dep_kind
-                        ~targets:(Static [])
-                        ~targets_dir:dir)))
+               let src = src.path in
+               add_alias src ~loc:(Some loc)
+                 (action_for_pp sctx ~dep_kind ~loc ~expander ~action
+                    ~src ~target:None)))
         | Pps { loc; pps; flags; staged } ->
           if staged then
             Errors.fail loc
@@ -589,8 +593,8 @@ let lint_module sctx ~dir ~expander ~dep_kind ~lint ~lib_name ~scope ~dir_kind =
           let corrected_suffix = ".lint-corrected" in
           let driver_and_flags =
             let open Result.O in
-            get_ppx_driver sctx ~loc ~scope ~dir_kind pps
-            >>| fun (exe, driver) ->
+            let+ (exe, driver) =
+              get_ppx_driver sctx ~loc ~scope ~dir_kind pps in
             (exe,
              let bindings =
                Pform.Map.singleton "corrected-suffix"
@@ -633,8 +637,11 @@ let make sctx ~dir ~expander ~dep_kind ~lint ~preprocess
     Staged.unstage (lint_module sctx ~dir ~expander ~dep_kind ~lint ~lib_name
                       ~scope ~dir_kind)
   in
-  Per_module.map preprocess ~f:(function
-    | Preprocess.No_preprocessing ->
+  Per_module.map preprocess ~f:(fun pp ->
+    match Dune_file.Preprocess.remove_future_syntax pp
+            (Super_context.context sctx).version
+    with
+    | No_preprocessing ->
       (fun m ~lint ->
          let ast = setup_reason_rules sctx m in
          if lint then lint_module ~ast ~source:m;
@@ -643,26 +650,13 @@ let make sctx ~dir ~expander ~dep_kind ~lint ~preprocess
       (fun m ~lint ->
          let ast =
            pped_module m ~f:(fun _kind src dst ->
-             let bindings = Pform.Map.input_file src in
-             let expander = Expander.add_bindings expander ~bindings in
+             let action = action_for_pp sctx ~dep_kind ~loc ~expander
+                            ~action ~src ~target:(Some dst)
+             in
              SC.add_rule sctx ~loc ~dir
-               (preprocessor_deps
-                >>>
-                Build.path src
-                >>^ (fun _ -> Bindings.empty)
-                >>>
-                SC.Action.run sctx
-                  (Chdir (workspace_root_var, action))
-                  ~loc
-                  ~expander
-                  ~dep_kind
-                  ~targets:(Forbidden "preprocessing actions")
-                  ~targets_dir:(Path.parent_exn dst)
-                >>>
-                Build.action_dyn () ~targets:[dst]
-                >>^ fun action ->
-                Action.with_stdout_to dst action))
-           |> setup_reason_rules sctx in
+               (preprocessor_deps >>> action))
+           |> setup_reason_rules sctx
+         in
          if lint then lint_module ~ast ~source:m;
          ast)
     | Pps { loc; pps; flags; staged } ->
@@ -675,7 +669,7 @@ let make sctx ~dir ~expander ~dep_kind ~lint ~preprocess
         let corrected_suffix = ".ppx-corrected" in
         let driver_and_flags =
           let open Result.O in
-          get_ppx_driver sctx ~loc ~scope ~dir_kind pps >>| fun (exe, driver) ->
+          let+ (exe, driver) = get_ppx_driver sctx ~loc ~scope ~dir_kind pps in
           (exe,
            let bindings =
              Pform.Map.singleton "corrected-suffix"
@@ -710,7 +704,8 @@ let make sctx ~dir ~expander ~dep_kind ~lint ~preprocess
       end else begin
         let pp_flags = Build.of_result (
           let open Result.O in
-          get_ppx_driver sctx ~loc ~scope ~dir_kind pps >>| fun (exe, driver) ->
+          let+ (exe, driver) =
+            get_ppx_driver sctx ~loc ~scope ~dir_kind pps in
           Build.memoize "ppx command"
             (Build.path exe
              >>>
@@ -748,7 +743,6 @@ let pp_module_as t ?(lint=true) name m =
 
 let get_ppx_driver sctx ~scope ~dir_kind pps =
   let open Result.O in
-  Lib.DB.resolve_pps (Scope.libs scope) pps
-  >>| fun libs ->
+  let+ libs = Lib.DB.resolve_pps (Scope.libs scope) pps in
   let sctx = SC.host sctx in
   ppx_driver_exe sctx libs ~dir_kind

@@ -45,6 +45,14 @@ module Make(Elt : Comparable.S) : S with type elt = Elt.t = struct
   let choose = choose_opt
   let split x t = split t x
 
+  let union_map l ~f =
+    List.fold_left ~init:empty l ~f:(fun acc x ->
+      let s = f x in
+      union acc s)
+
+  let union_all l =
+    union_map l ~f:(fun x -> x)
+
   exception Found of elt
   let find t ~f =
     match
@@ -56,6 +64,12 @@ module Make(Elt : Comparable.S) : S with type elt = Elt.t = struct
     with
     | () -> None
     | exception (Found e) -> Some e
+
+  let choose_exn t =
+    match choose t with
+    | Some e -> e
+    | None ->
+      Exn.code_error "Set.choose_exn" []
 end
 
 let to_sexp to_list f t =

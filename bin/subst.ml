@@ -52,8 +52,8 @@ let info = Term.info "subst" ~doc ~man
 let term =
   match Wp.t with
   | Jbuilder ->
-    let%map common = Common.term
-    and name =
+    let+ common = Common.term
+    and+ name =
       Arg.(value
            & opt (some string) None
            & info ["n"; "name"] ~docv:"NAME"
@@ -62,13 +62,14 @@ let term =
     Common.set_common common ~targets:[];
     Scheduler.go ~common (Watermarks.subst ?name)
   | Dune ->
-    let%map () = Term.const () in
+    let+ () = Term.const () in
     let config : Config.t =
       { display     = Quiet
       ; concurrency = Fixed 1
       }
     in
     Path.set_root (Path.External.cwd ());
+    Path.set_build_dir (Path.Kind.of_string Common.default_build_dir);
     Dune.Scheduler.go ~config Watermarks.subst
 
 let command = term, info

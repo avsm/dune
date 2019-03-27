@@ -45,31 +45,32 @@ module For_stanza = struct
     }
 end
 
-module Gen(P : Install_rules.Params) = struct
+module Gen(P : sig val sctx : Super_context.t end) = struct
   module Alias = Build_system.Alias
   module CC = Compilation_context
   module SC = Super_context
   (* We need to instantiate Install_rules earlier to avoid issues whenever
    * Super_context is used too soon.
    * See: https://github.com/ocaml/dune/pull/1354#issuecomment-427922592 *)
-  module Install_rules = Install_rules.Gen(P)
   module Lib_rules = Lib_rules.Gen(P)
 
   let sctx = P.sctx
 
-  let gen_format_rules sctx ~dir =
+  let with_format sctx ~dir ~f =
     let scope = SC.find_scope_by_dir sctx dir in
     let project = Scope.project scope in
-    match Dune_project.find_extension_args project Auto_format.key with
-    | None -> ()
-    | Some config ->
-      Format_rules.gen_rules sctx config ~dir
+    Dune_project.find_extension_args project Auto_format.key
+    |> Option.iter ~f
+
+  let gen_format_rules sctx ~output_dir =
+    with_format sctx ~dir:output_dir
+      ~f:(Format_rules.gen_rules_output sctx ~output_dir)
 
   (* Stanza *)
 
   let gen_rules dir_contents cctxs
         { Dir_with_dune. src_dir; ctx_dir; data = stanzas
-        ; scope; kind = dir_kind } =
+        ; scope; kind = dir_kind ; dune_version = _ } =
     let expander = Super_context.expander sctx ~dir:ctx_dir in
     let for_stanza stanza =
       let dir = ctx_dir in
@@ -146,13 +147,17 @@ module Gen(P : Install_rules.Params) = struct
               ~f:(fun acc a -> For_stanza.cons acc (for_stanza a))
             |> For_stanza.rev
     in
-    Option.iter (Merlin.merge_all merlins) ~f:(fun m ->
-      let more_src_dirs =
-        List.map (Dir_contents.dirs dir_contents) ~f:(fun dc ->
-          Path.drop_optional_build_context (Dir_contents.dir dc))
-      in
-      Merlin.add_rules sctx ~dir:ctx_dir ~more_src_dirs ~expander ~dir_kind
-        (Merlin.add_source_dir m src_dir));
+    let allow_approx_merlin =
+      let dune_project = Scope.project scope in
+      Dune_project.allow_approx_merlin dune_project in
+    Option.iter (Merlin.merge_all ~allow_approx_merlin merlins)
+      ~f:(fun m ->
+        let more_src_dirs =
+          List.map (Dir_contents.dirs dir_contents) ~f:(fun dc ->
+            Path.drop_optional_build_context (Dir_contents.dir dc))
+        in
+        Merlin.add_rules sctx ~dir:ctx_dir ~more_src_dirs ~expander ~dir_kind
+          (Merlin.add_source_dir m src_dir));
     List.iter stanzas ~f:(fun stanza ->
       match (stanza : Stanza.t) with
       | Menhir.T m when Expander.eval_blang expander m.enabled_if ->
@@ -181,26 +186,40 @@ module Gen(P : Install_rules.Params) = struct
           Menhir_rules.gen_rules cctx m ~dir:ctx_dir
         end
       | _ -> ());
+    let dyn_deps =
+      let pred =
+        let id = lazy (
+          let open Sexp.Encoder in
+          constr "exclude" (List.map ~f:Path.to_sexp js_targets)
+        ) in
+        Predicate.create ~id ~f:(fun basename ->
+          not (List.exists js_targets ~f:(fun js_target ->
+            String.equal (Path.basename js_target) basename)))
+      in
+      File_selector.create ~dir:ctx_dir pred
+      |> Build.paths_matching ~loc:Loc.none
+    in
     Build_system.Alias.add_deps
-      ~dyn_deps:(Build.paths_matching ~dir:ctx_dir ~loc:Loc.none (fun p ->
-        not (List.exists js_targets ~f:(Path.equal p))))
+      ~dyn_deps
       (Build_system.Alias.all ~dir:ctx_dir) Path.Set.empty;
     cctxs
 
   let gen_rules dir_contents cctxs ~dir : (Loc.t * Compilation_context.t) list =
-    gen_format_rules sctx ~dir;
+    with_format sctx ~dir ~f:(fun _ -> Format_rules.gen_rules ~dir);
     match SC.stanzas_in sctx ~dir with
     | None -> []
     | Some d -> gen_rules dir_contents cctxs d
 
   let gen_rules ~dir components : Build_system.extra_sub_directories_to_keep =
+    Install_rules.init_meta sctx ~dir;
     (match components with
      | ".js"  :: rest -> Js_of_ocaml_rules.setup_separate_compilation_rules
                            sctx rest
-     | "_doc" :: rest -> Lib_rules.Odoc.gen_rules rest ~dir
+     | "_doc" :: rest -> Odoc.gen_rules sctx rest ~dir
      | ".ppx"  :: rest -> Preprocessing.gen_rules sctx rest
      | comps ->
        begin match List.last comps with
+       | Some ".formatted" -> gen_format_rules sctx ~output_dir:dir
        | Some ".bin" ->
          let src_dir = Path.parent_exn dir in
          Super_context.local_binaries sctx ~dir:src_dir
@@ -240,8 +259,9 @@ module Gen(P : Install_rules.Params) = struct
     | _  -> These String.Set.empty
 
   let init () =
-    Install_rules.init ();
-    Lib_rules.Odoc.init ()
+    Install_rules.init sctx;
+    Build_system.handle_add_rule_effects (fun () ->
+      Odoc.init sctx)
 end
 
 module type Gen = sig
@@ -283,7 +303,7 @@ let gen ~contexts
         >>| Option.some
     in
     let stanzas () =
-      Dune_load.Dune_files.eval ~context dune_files >>| fun stanzas ->
+      let+ stanzas = Dune_load.Dune_files.eval ~context dune_files in
       match only_packages with
       | None -> stanzas
       | Some pkgs ->
@@ -292,7 +312,7 @@ let gen ~contexts
             stanzas = relevant_stanzas pkgs dir_conf.stanzas
           })
     in
-    Fiber.fork_and_join host stanzas >>= fun (host, stanzas) ->
+    let* (host, stanzas) = Fiber.fork_and_join host stanzas in
     let sctx =
       Super_context.create
         ?host
@@ -305,13 +325,14 @@ let gen ~contexts
     in
     let module P = struct let sctx = sctx end in
     let module M = Gen(P) in
-    Fiber.Ivar.fill (Hashtbl.find_exn sctxs context.name) sctx
-    >>| fun () ->
+    let+ () =
+      Fiber.Ivar.fill (Hashtbl.find_exn sctxs context.name) sctx in
     (context.name, (module M : Gen))
   in
-  Fiber.parallel_map contexts ~f:make_sctx >>| fun l ->
-  let map = String.Map.of_list_exn l in
+  let+ contexts = Fiber.parallel_map contexts ~f:make_sctx in
+  let map = String.Map.of_list_exn contexts in
   Build_system.set_rule_generators
     (String.Map.map map ~f:(fun (module M : Gen) -> M.gen_rules));
   String.Map.iter map ~f:(fun (module M : Gen) -> M.init ());
   String.Map.map map ~f:(fun (module M : Gen) -> M.sctx)
+

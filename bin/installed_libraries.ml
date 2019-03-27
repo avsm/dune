@@ -1,14 +1,13 @@
 open Stdune
 open Import
-open Fiber.O
 
 let doc = "Print out libraries installed on the system."
 
 let info = Term.info "installed-libraries" ~doc
 
 let term =
-  let%map common = Common.term
-  and na =
+  let+ common = Common.term
+  and+ na =
     Arg.(value
          & flag
          & info ["na"; "not-available"]
@@ -17,17 +16,19 @@ let term =
   Common.set_common common ~targets:[];
   let env = Import.Main.setup_env ~capture_outputs:common.capture_outputs in
   Scheduler.go ~log:(Log.create common) ~common (fun () ->
-    Context.create ~env
-      { merlin_context = Some "default"
-      ; contexts = [Default { loc = Loc.of_pos __POS__
-                            ; targets   = [Native]
-                            ; profile   = Config.default_build_profile
-                            ; env       = None
-                            ; toolchain = None
-                            }]
-      ; env = None
-      }
-    >>= fun ctxs ->
+    let open Fiber.O in
+    let* ctxs =
+      Context.create ~env
+        { merlin_context = Some "default"
+        ; contexts = [Default { loc = Loc.of_pos __POS__
+                              ; targets   = [Native]
+                              ; profile   = Config.default_build_profile
+                              ; env       = None
+                              ; toolchain = None
+                              }]
+        ; env = None
+        }
+    in
     let ctx = List.hd ctxs in
     let findlib = ctx.findlib in
     if na then begin

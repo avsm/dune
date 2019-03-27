@@ -15,21 +15,21 @@ module Repr = struct
     | Second : ('a, 'b) t -> ('c * 'a, 'c * 'b) t
     | Split : ('a, 'b) t * ('c, 'd) t -> ('a * 'c, 'b * 'd) t
     | Fanout : ('a, 'b) t * ('a, 'c) t -> ('a, 'b * 'c) t
-    | Paths : Path.Set.t -> ('a, 'a) t
     | Paths_for_rule : Path.Set.t -> ('a, 'a) t
-    | Paths_glob : glob_state ref -> ('a, Path.Set.t) t
+    | Paths_glob : File_selector.t -> ('a, Path.Set.t) t
     (* The reference gets decided in Build_interpret.deps *)
     | If_file_exists : Path.t * ('a, 'b) if_file_exists_state ref -> ('a, 'b) t
     | Contents : Path.t -> ('a, string) t
     | Lines_of : Path.t -> ('a, string list) t
     | Vpath : 'a Vspec.t -> (unit, 'a) t
     | Dyn_paths : ('a, Path.Set.t) t -> ('a, 'a) t
+    | Dyn_deps : ('a, Dep.Set.t) t -> ('a, 'a) t
     | Record_lib_deps : Lib_deps_info.t -> ('a, 'a) t
     | Fail : fail -> (_, _) t
     | Memo : 'a memo -> (unit, 'a) t
     | Catch : ('a, 'b) t * (exn -> 'b) -> ('a, 'b) t
     | Lazy_no_targets : ('a, 'b) t Lazy.t -> ('a, 'b) t
-    | Env_var : string -> ('a, 'a) t
+    | Deps : Dep.Set.t -> ('a, 'a) t
 
   and 'a memo =
     { name          : string
@@ -40,14 +40,14 @@ module Repr = struct
   and 'a memo_state =
     | Unevaluated
     | Evaluating
-    | Evaluated of 'a * Deps.t
+    | Evaluated of 'a * Dep.Set.t
 
   and ('a, 'b) if_file_exists_state =
     | Undecided of ('a, 'b) t * ('a, 'b) t
     | Decided   of bool * ('a, 'b) t
 
   and glob_state =
-    | G_unevaluated of Loc.t * Path.t * (Path.t -> bool)
+    | G_unevaluated of Loc.t * Path.t * Path.t Predicate.t
     | G_evaluated   of Path.Set.t
 
   let get_if_file_exists_exn state =
@@ -110,20 +110,17 @@ let rec all = function
 
 let lazy_no_targets t = Lazy_no_targets t
 
-let path p = Paths (Path.Set.singleton p)
-let paths ps = Paths (Path.Set.of_list ps)
-let path_set ps = Paths ps
-let paths_glob ~loc ~dir re =
-  let predicate p = Re.execp re (Path.basename p) in
-  Paths_glob (ref (G_unevaluated (loc, dir, predicate)))
-let paths_matching ~loc ~dir f =
-  Paths_glob (ref (G_unevaluated (loc, dir, f)))
+let dep d = Deps (Dep.Set.singleton d)
+let path p = Deps (Dep.Set.singleton (Dep.file p))
+let paths ps = Deps (Dep.Set.of_files ps)
+let path_set ps = Deps (Dep.Set.of_files_set ps)
+let paths_matching ~loc:_ dir_glob = Paths_glob dir_glob
 let vpath vp = Vpath vp
 let dyn_paths t = Dyn_paths (t >>^ Path.Set.of_list)
 let dyn_path_set t = Dyn_paths t
+let dyn_deps t = Dyn_deps t
 let paths_for_rule ps = Paths_for_rule ps
-
-let env_var s = Env_var s
+let env_var s = Deps (Dep.Set.singleton (Dep.env s))
 
 let catch t ~on_error = Catch (t, on_error)
 
@@ -190,12 +187,13 @@ let get_prog = function
     >>> dyn_paths (arr (function Error _ -> [] | Ok x -> [x]))
 
 let prog_and_args ?(dir=Path.root) prog args =
-  Paths (Arg_spec.add_deps args Path.Set.empty)
+  Deps (Arg_spec.static_deps args) &&& arr (fun x -> x)
+  >>^ snd
   >>>
   (get_prog prog &&&
    (arr (Arg_spec.expand ~dir args)
     >>>
-    dyn_path_set (arr (fun (_args, deps) -> deps))
+    dyn_deps (arr (fun (_args, deps) -> deps))
     >>>
     arr fst))
 

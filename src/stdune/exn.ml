@@ -1,3 +1,5 @@
+module List = Dune_caml.ListLabels
+module String = Dune_caml.StringLabels
 type t = exn
 
 exception Code_error of Sexp.t
@@ -37,7 +39,6 @@ let code_error message vars =
              Sexp.List [Atom name; value])))
   |> raise
 
-module String = Dune_caml.StringLabels
 let pp_uncaught ~backtrace fmt exn =
   let s =
     Printf.sprintf "%s\n%s" (Printexc.to_string exn) backtrace
@@ -62,3 +63,6 @@ include
   end) : (sig
      val raise_with_backtrace: exn -> Printexc.raw_backtrace -> _
    end))
+
+let equal = (=)
+let hash = Dune_caml.Hashtbl.hash

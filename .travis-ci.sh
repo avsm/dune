@@ -5,6 +5,8 @@ OPAMYES="true"; export OPAMYES
 
 OPAM_VERSION="2.0.3"
 
+ODOC="odoc.1.4.0"
+
 TARGET="$1"; shift
 
 case "$TARGET" in
@@ -49,7 +51,8 @@ case "$TARGET" in
         rm -rf ~/.opam
         opam init --disable-sandboxing
         eval $(opam config env)
-        opam install ocamlfind utop ppxlib odoc menhir ocaml-migrate-parsetree js_of_ocaml-ppx js_of_ocaml-compiler
+        _boot/install/default/bin/dune runtest && \
+        opam install ocamlfind utop ppxlib $ODOC menhir ocaml-migrate-parsetree js_of_ocaml-ppx js_of_ocaml-compiler
         opam remove dune jbuilder \
              `opam list --depends-on jbuilder --installed --short` \
              `opam list --depends-on dune     --installed --short`
@@ -63,6 +66,13 @@ case "$TARGET" in
   ;;
   build)
     UPDATE_OPAM=0
+    RUNTEST_NO_DEPS=runtest-no-deps.out
+    echo -en "travis_fold:start:dune.bootstrap\r"
+    ocaml bootstrap.ml
+    echo -en "travis_fold:end:dune.bootstrap\r"
+    ./boot.exe --subst
+    echo -en "travis_fold:start:dune.boot\r"
+    ./boot.exe
     if [ $WITH_OPAM -eq 1 ] ; then
       echo -en "travis_fold:start:opam.deps\r"
       DATE=$(date +%Y%m%d)
@@ -78,20 +88,18 @@ case "$TARGET" in
         UPDATE_OPAM=1
         opam upgrade
       fi
+      if ! ./_boot/install/default/bin/dune build @runtest-no-deps &> $RUNTEST_NO_DEPS ; then
+        cat $RUNTEST_NO_DEPS;
+        exit 1;
+      fi
       opam list
-      echo "version: \"1.0+dev$DATE\"" >> dune.opam
       opam pin add dune . --no-action
-      opam install ocamlfind utop ppxlib odoc ocaml-migrate-parsetree js_of_ocaml-ppx js_of_ocaml-compiler
+      opam install ocamlfind utop ppxlib $ODOC ocaml-migrate-parsetree js_of_ocaml-ppx js_of_ocaml-compiler
       echo -en "travis_fold:end:opam.deps\r"
     fi
-    echo -en "travis_fold:start:dune.bootstrap\r"
-    ocaml bootstrap.ml
-    echo -en "travis_fold:end:dune.bootstrap\r"
-    ./boot.exe --subst
-    echo -en "travis_fold:start:dune.boot\r"
-    ./boot.exe
     echo -en "travis_fold:end:dune.boot\r"
     if [ $WITH_OPAM -eq 1 ] ; then
+      cat $RUNTEST_NO_DEPS;
       _boot/install/default/bin/dune runtest && \
       _boot/install/default/bin/dune build @test/blackbox-tests/runtest-js && \
       ! _boot/install/default/bin/dune build @test/fail-with-background-jobs-running

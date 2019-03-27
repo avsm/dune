@@ -1,11 +1,14 @@
+module Appendable_list = Appendable_list
 module Ansi_color = Ansi_color
 module Array      = Array
 module Bytes      = Bytes
 module Comparable = Comparable
 module Either     = Either
 module Exn        = Exn
+module Exn_with_backtrace = Exn_with_backtrace
 module Filename   = Filename
 module Hashtbl    = Hashtbl
+module Table      = Table
 module Int        = Int
 module Id         = Id
 module Io         = Io
@@ -39,6 +42,8 @@ module Unit       = Unit
 module Monad      = Monad
 module Fn         = Fn
 module Dyn        = Dyn
+module Float      = Float
+module Tuple      = Tuple
 
 external reraise : exn -> _ = "%reraise"
 

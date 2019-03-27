@@ -35,6 +35,7 @@ module External : sig
   type t
 
   val to_sexp : t Sexp.Encoder.t
+  val to_dyn : t -> Dyn.t
 
   val compare : t -> t -> Ordering.t
   val compare_val : t -> t -> Ordering.t
@@ -76,6 +77,7 @@ end = struct
     make t
 
   let to_sexp t = Sexp.Encoder.string (to_string t)
+  let to_dyn t = Dyn.String (to_string t)
 
 (*
   let rec cd_dot_dot t =
@@ -134,6 +136,7 @@ module Local : sig
   type t
 
   val to_sexp : t Sexp.Encoder.t
+  val to_dyn : t -> Dyn.t
 
   val root : t
   val is_root : t -> bool
@@ -232,6 +235,7 @@ end = struct
       | i -> String.sub t ~pos:(i + 1) ~len:(len - i - 1)
 
   let to_sexp t = Sexp.Encoder.string (to_string t)
+  let to_dyn t = Dyn.String (to_string t)
 
   module L = struct
     let relative_result t components =
@@ -638,6 +642,13 @@ let to_sexp t =
   | In_source_tree s -> constr Local.to_sexp "In_source_tree" s
   | External s -> constr External.to_sexp "External" s
 
+let to_dyn t =
+  let open Dyn in
+  match t with
+  | In_build_dir s -> Variant ("In_build_dir", [Local.to_dyn s])
+  | In_source_tree s -> Variant ("In_source_tree", [Local.to_dyn s])
+  | External s -> Variant ("External", [External.to_dyn s])
+
 let of_filename_relative_to_initial_cwd fn =
   external_ (
     if Filename.is_relative fn then
@@ -770,6 +781,13 @@ let extract_build_context = function
           |> in_source_tree )
     end
 
+let extract_build_context_exn t =
+  match extract_build_context t with
+  | Some t -> t
+  | None -> Exn.code_error "Path.extract_build_context_exn"
+              ["t", to_sexp t]
+
+
 let extract_build_context_dir = function
   | In_source_tree _
   | External _ -> None
@@ -785,6 +803,12 @@ let extract_build_context_dir = function
           |> in_source_tree
         )
     end
+
+let extract_build_context_dir_exn t =
+  match extract_build_context_dir t with
+  | Some t -> t
+  | None -> Exn.code_error "Path.extract_build_context_dir_exn"
+              ["t", to_sexp t]
 
 let drop_build_context t =
   Option.map (extract_build_context t) ~f:snd

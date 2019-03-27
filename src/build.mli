@@ -59,21 +59,14 @@ val lazy_no_targets : ('a, 'b) t Lazy.t -> ('a, 'b) t
     build arrow. *)
 val path  : Path.t -> ('a, 'a) t
 
+val dep : Dep.t -> ('a, 'a) t
+
 val paths : Path.t list -> ('a, 'a) t
 val path_set : Path.Set.t -> ('a, 'a) t
 
-(** Evaluate a glob and record all the matched files as dependencies
-    of the action produced by the build arrow. *)
-val paths_glob : loc:Loc.t -> dir:Path.t -> Re.re -> ('a, Path.Set.t) t
-
-
 (** Evaluate a predicate against all targets and record all the matched files as
     dependencies of the action produced by the build arrow. *)
-val paths_matching
-  :  loc:Loc.t
-  -> dir:Path.t
-  -> (Path.t -> bool)
-  -> ('a, Path.Set.t) t
+val paths_matching : loc:Loc.t -> File_selector.t -> ('a, Path.Set.t) t
 
 (** [env_var v] records [v] as an environment variable that is read by the
     action produced by the build arrow. *)
@@ -196,20 +189,20 @@ module Repr : sig
     | Second : ('a, 'b) t -> ('c * 'a, 'c * 'b) t
     | Split : ('a, 'b) t * ('c, 'd) t -> ('a * 'c, 'b * 'd) t
     | Fanout : ('a, 'b) t * ('a, 'c) t -> ('a, 'b * 'c) t
-    | Paths : Path.Set.t -> ('a, 'a) t
     | Paths_for_rule : Path.Set.t -> ('a, 'a) t
-    | Paths_glob : glob_state ref -> ('a, Path.Set.t) t
+    | Paths_glob : File_selector.t -> ('a, Path.Set.t) t
     | If_file_exists : Path.t * ('a, 'b) if_file_exists_state ref -> ('a, 'b) t
     | Contents : Path.t -> ('a, string) t
     | Lines_of : Path.t -> ('a, string list) t
     | Vpath : 'a Vspec.t -> (unit, 'a) t
     | Dyn_paths : ('a, Path.Set.t) t -> ('a, 'a) t
+    | Dyn_deps : ('a, Dep.Set.t) t -> ('a, 'a) t
     | Record_lib_deps : Lib_deps_info.t -> ('a, 'a) t
     | Fail : fail -> (_, _) t
     | Memo : 'a memo -> (unit, 'a) t
     | Catch : ('a, 'b) t * (exn -> 'b) -> ('a, 'b) t
     | Lazy_no_targets : ('a, 'b) t Lazy.t -> ('a, 'b) t
-    | Env_var : string -> ('a, 'a) t
+    | Deps : Dep.Set.t -> ('a, 'a) t
 
   and 'a memo =
     { name          : string
@@ -220,14 +213,14 @@ module Repr : sig
   and 'a memo_state =
     | Unevaluated
     | Evaluating
-    | Evaluated of 'a * Deps.t (* dynamic dependencies *)
+    | Evaluated of 'a * Dep.Set.t (* dynamic dependencies *)
 
   and ('a, 'b) if_file_exists_state =
     | Undecided of ('a, 'b) t * ('a, 'b) t
     | Decided   of bool * ('a, 'b) t
 
   and glob_state =
-    | G_unevaluated of Loc.t * Path.t * (Path.t -> bool)
+    | G_unevaluated of Loc.t * Path.t * Path.t Predicate.t
     | G_evaluated   of Path.Set.t
 
   val get_if_file_exists_exn : ('a, 'b) if_file_exists_state ref -> ('a, 'b) t

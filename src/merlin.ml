@@ -5,28 +5,62 @@ open! No_io
 
 module SC = Super_context
 
+let warn_dropped_pp loc ~allow_approx_merlin ~reason =
+  if not allow_approx_merlin then
+    Errors.warn loc
+      ".merlin generated is inaccurate. %s.\n\
+        Split the stanzas into different directories or silence this warning \
+        by adding (allow_approximate_merlin) to your dune-project."
+      reason
+
 module Preprocess = struct
-  let merge (a : Dune_file.Preprocess.t) (b : Dune_file.Preprocess.t) =
+
+  let merge ~allow_approx_merlin
+        (a : Dune_file.Preprocess.t) (b : Dune_file.Preprocess.t) =
     match a, b with
+    (* the 2 cases below aren't entirely correct as it means that we have merlin
+       preprocess files that don't need to be preprocessed *)
     | No_preprocessing, pp
     | pp, No_preprocessing -> pp
-    | (Action _ as action), _
-    | _, (Action _ as action) -> action
-    | Pps { loc = _; pps = pps1; flags = flags1; staged = s1 },
+    | (Future_syntax _ as future_syntax), _
+    | _, (Future_syntax _ as future_syntax) -> future_syntax
+    | Action (loc, a1), Action (_, a2) ->
+      if Action_dune_lang.compare_no_locs a1 a2 <> Ordering.Eq then
+        warn_dropped_pp loc ~allow_approx_merlin
+          ~reason:"this action preprocessor is not equivalent to other \
+                   preproocessor specifications.";
+      Action (loc, a1)
+    | Pps _, Action (loc, _)
+    | Action (loc, _), Pps _ ->
+      warn_dropped_pp loc ~allow_approx_merlin
+        ~reason:"cannot mix action and pps preprocessors";
+      No_preprocessing
+    | Pps { loc ; pps = pps1; flags = flags1; staged = s1 },
       Pps { loc = _; pps = pps2; flags = flags2; staged = s2 } ->
-      match
-        match Bool.compare s1 s2 with
-        | Gt| Lt as ne -> ne
-        | Eq ->
-          match List.compare flags1 flags2 ~compare:String.compare with
-          | Gt | Lt as ne -> ne
-          | Eq ->
-            List.compare pps1 pps2 ~compare:(fun (_, a) (_, b) ->
-              Lib_name.compare a b)
-      with
-      | Eq -> a
-      | _  -> No_preprocessing
+      if Bool.(<>) s1 s2
+      || List.compare flags1 flags2 ~compare:String.compare <> Eq
+      || List.compare pps1 pps2 ~compare:(fun (_, x) (_, y) ->
+        Lib_name.compare x y) <> Eq
+      then
+        warn_dropped_pp loc ~allow_approx_merlin
+          ~reason:"pps specification isn't identical in all stanzas";
+      No_preprocessing
 end
+
+let quote_for_merlin s =
+  let s =
+    if Sys.win32 then
+      (* We need this hack because merlin unescapes backslashes (except when
+         protected by single quotes). It is only a problem on windows
+         because Filename.quote is using double quotes. *)
+      String.escape_only '\\' s
+    else
+      s
+  in
+  if need_quoting s then
+    Filename.quote s
+  else
+    s
 
 module Dot_file = struct
   let b = Buffer.create 256
@@ -47,7 +81,7 @@ module Dot_file = struct
     | [] -> ()
     | flags ->
       print "FLG";
-      List.iter flags ~f:(fun f -> printf " %s" (quote_for_shell f));
+      List.iter flags ~f:(fun f -> printf " %s" (quote_for_merlin f));
       print "\n"
     end;
     Buffer.contents b
@@ -89,7 +123,9 @@ let add_source_dir t dir =
 
 let pp_flags sctx ~expander ~dir_kind { preprocess; libname; _ } =
   let scope = Expander.scope expander in
-  match preprocess with
+  match Dune_file.Preprocess.remove_future_syntax preprocess
+          (Super_context.context sctx).version
+  with
   | Pps { loc = _; pps; flags; staged = _ } -> begin
     match Preprocessing.get_ppx_driver sctx ~scope ~dir_kind pps with
     | Error _ -> None
@@ -98,7 +134,7 @@ let pp_flags sctx ~expander ~dir_kind { preprocess; libname; _ } =
        :: "--as-ppx"
        :: Preprocessing.cookie_library_name libname
        @ flags)
-      |> List.map ~f:quote_for_shell
+      |> List.map ~f:quote_for_merlin
       |> String.concat ~sep:" "
       |> Filename.quote
       |> sprintf "FLG -ppx %s"
@@ -119,7 +155,7 @@ let pp_flags sctx ~expander ~dir_kind { preprocess; libname; _ } =
       |> Option.List.all
       >>= fun args ->
       (Path.to_absolute_filename exe :: args)
-      |> List.map ~f:quote_for_shell
+      |> List.map ~f:quote_for_merlin
       |> String.concat ~sep:" "
       |> Filename.quote
       |> sprintf "FLG -pp %s"
@@ -149,7 +185,7 @@ let dot_merlin sctx ~dir ~more_src_dirs ~expander ~dir_kind
        Build.create_file (Path.relative dir ".merlin-exists"));
     Path.Set.singleton merlin_file
     |> Build_system.Alias.add_deps (Build_system.Alias.check ~dir);
-    SC.add_rule sctx ~dir ~mode:Promote_but_delete_on_clean (
+    SC.add_rule sctx ~dir ~mode:(Promote (Until_clean, None)) (
       flags
       >>^ (fun flags ->
         let (src_dirs, obj_dirs) =
@@ -174,10 +210,10 @@ let dot_merlin sctx ~dir ~more_src_dirs ~expander ~dir_kind
       >>>
       Build.write_file_dyn merlin_file)
 
-let merge_two a b =
+let merge_two ~allow_approx_merlin a b =
   { requires = Lib.Set.union a.requires b.requires
   ; flags = a.flags &&& b.flags >>^ (fun (a, b) -> a @ b)
-  ; preprocess = Preprocess.merge a.preprocess b.preprocess
+  ; preprocess = Preprocess.merge ~allow_approx_merlin a.preprocess b.preprocess
   ; libname =
       (match a.libname with
        | Some _ as x -> x
@@ -186,9 +222,10 @@ let merge_two a b =
   ; objs_dirs = Path.Set.union a.objs_dirs b.objs_dirs
   }
 
-let merge_all = function
+let merge_all ~allow_approx_merlin = function
   | [] -> None
-  | init::ts -> Some (List.fold_left ~init ~f:merge_two ts)
+  | init :: ts ->
+    Some (List.fold_left ~init ~f:(merge_two ~allow_approx_merlin) ts)
 
 let add_rules sctx ~dir ~more_src_dirs ~expander ~dir_kind merlin =
   if (SC.context sctx).merlin then

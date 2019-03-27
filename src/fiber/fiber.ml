@@ -4,6 +4,8 @@ open! Stdune
    same as the current one *)
 type 'a t = ('a -> unit) -> unit
 
+let of_thunk f k = f () k
+
 module Execution_context : sig
   module K : sig
     type 'a t
@@ -34,13 +36,15 @@ module Execution_context : sig
 
   (* Set the current error handler. [on_error] is called in the
      current execution context. *)
-  val set_error_handler : on_error:(exn -> unit) -> ('a -> 'b t) -> 'a -> 'b t
+  val set_error_handler :
+    on_error:(Exn_with_backtrace.t -> unit) -> ('a -> 'b t) -> 'a -> 'b t
 
   val vars : unit -> Univ_map.t
   val set_vars : Univ_map.t -> ('a -> 'b t) -> 'a -> 'b t
+  val set_vars_sync : Univ_map.t -> ('a -> 'b) -> 'a -> 'b
 end = struct
   type t =
-    { on_error : exn k option (* This handler must never raise *)
+    { on_error : Exn_with_backtrace.t k option (* This handler must never raise *)
     ; fibers   : int ref (* Number of fibers running in this execution
                             context *)
     ; vars     : Univ_map.t
@@ -70,14 +74,14 @@ end = struct
     | None ->
       (* We can't let the exception leak at this point, so we just
          dump the error on stderr and exit *)
-      let backtrace = Printexc.get_backtrace () in
-      Format.eprintf "%a@.%!" (Exn.pp_uncaught ~backtrace) exn;
+      Format.eprintf "%a@.%!" Exn_with_backtrace.pp_uncaught exn;
       sys_exit 42
     | Some { ctx; run } ->
       current := ctx;
       try
         run exn
       with exn ->
+        let exn = Exn_with_backtrace.capture exn in
         forward_error ctx exn
 
   let rec deref t =
@@ -94,6 +98,7 @@ end = struct
     try
       k.run x
     with exn ->
+      let exn = Exn_with_backtrace.capture exn in
       forward_error k.ctx exn;
       deref k.ctx
 
@@ -106,6 +111,7 @@ end = struct
     (try
        f x k
      with exn ->
+       let exn = Exn_with_backtrace.capture exn in
        forward_error child exn;
        deref child);
     current := parent
@@ -131,6 +137,10 @@ end = struct
   let set_vars vars f x k =
     let t = !current in
     exec_in ~parent:t ~child:{ t with vars } f x k
+  let set_vars_sync (type b) vars f x : b =
+    let t = !current in
+    current := { t with vars };
+    Exn.protect ~finally:(fun () -> current := t) ~f:(fun () -> f x)
 
   module K = struct
     type 'a t = 'a k
@@ -144,6 +154,7 @@ end = struct
       (try
          run x
        with exn ->
+         let exn = Exn_with_backtrace.capture exn in
          forward_error ctx exn;
          deref ctx);
       current := backup
@@ -164,6 +175,7 @@ end = struct
     try
       f x k
     with exn ->
+      let exn = Exn_with_backtrace.capture exn in
       forward_error t exn;
       deref t;
       current := t
@@ -187,11 +199,15 @@ module O = struct
 
   let (>>|) t f k =
     t (fun x -> k (f x))
+
+  let ( let+ ) = ( >>| )
+  let ( let* ) = ( >>= )
 end
 
 open O
 
 let map t ~f = t >>| f
+let bind t ~f = t >>= f
 
 let both a b =
   a >>= fun x ->
@@ -308,8 +324,17 @@ module Var = struct
   let get     var = Univ_map.find     (EC.vars ()) var
   let get_exn var = Univ_map.find_exn (EC.vars ()) var
 
+  let set_sync var x f =
+    EC.set_vars_sync (Univ_map.add (EC.vars ()) var x) f ()
+
   let set var x f k =
     EC.set_vars (Univ_map.add (EC.vars ()) var x) f () k
+
+  let unset_sync var f =
+    EC.set_vars_sync (Univ_map.remove (EC.vars ()) var) f ()
+
+  let unset var f k =
+    EC.set_vars (Univ_map.remove (EC.vars ()) var) f () k
 
   let create () =
     create ~name:"var" (fun _ -> Sexp.Encoder.string "var")
@@ -472,14 +497,16 @@ let run t =
   let result = ref None in
   EC.apply (fun () -> t) () (fun x -> result := Some x);
   let rec loop () =
-    match !result with
-    | Some x -> x
-    | None ->
-      match List.rev !suspended with
-      | [] -> raise Never
-      | to_run ->
-        suspended := [];
-        K.run_list to_run ();
-        loop ()
+    match List.rev !suspended with
+    | [] ->
+      (match !result with
+       | None -> raise Never
+       | Some x -> x)
+    | to_run ->
+      suspended := [];
+      K.run_list to_run ();
+      loop ()
   in
   loop ()
+
+

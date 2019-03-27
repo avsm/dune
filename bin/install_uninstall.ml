@@ -1,6 +1,5 @@
 open Stdune
 open Import
-open Fiber.O
 
 let interpret_destdir ~destdir path =
   match destdir with
@@ -18,13 +17,14 @@ let get_dirs context ~prefix_from_command_line ~libdir_from_command_line =
     let dir = Option.value ~default:"lib" libdir_from_command_line in
     Fiber.return (prefix, Some (Path.relative prefix dir))
   | None ->
-    Context.install_prefix context >>= fun prefix ->
+    let open Fiber.O in
+    let* prefix = Context.install_prefix context in
     let libdir =
       match libdir_from_command_line with
       | None -> Context.install_ocaml_libdir context
       | Some l -> Fiber.return (Some (Path.relative prefix l))
     in
-    libdir >>| fun libdir ->
+    let+ libdir = libdir in
     (prefix, libdir)
 
 let resolve_package_install setup pkg =
@@ -125,8 +125,8 @@ let install_uninstall ~what =
   in
   let name_ = Arg.info [] ~docv:"PACKAGE" in
   let term =
-    let%map common = Common.term
-    and prefix_from_command_line =
+    let+ common = Common.term
+    and+ prefix_from_command_line =
       Arg.(value
            & opt (some string) None
            & info ["prefix"]
@@ -136,7 +136,7 @@ let install_uninstall ~what =
                      $(i,\\$prefix/lib), etc... It defaults to the current opam \
                      prefix if opam is available and configured, otherwise it uses \
                      the same prefix as the ocaml compiler.")
-    and libdir_from_command_line =
+    and+ libdir_from_command_line =
       Arg.(value
            & opt (some string) None
            & info ["libdir"]
@@ -146,7 +146,7 @@ let install_uninstall ~what =
                      is specified the default is $(i,\\$prefix/lib), otherwise \
                      it is the output of $(b,ocamlfind printconf destdir)"
           )
-    and destdir =
+    and+ destdir =
       Arg.(value
            & opt (some string) None
            & info ["destdir"]
@@ -155,19 +155,20 @@ let install_uninstall ~what =
                ~doc:"When passed, this directory is prepended to all \
                      installed paths."
           )
-    and dry_run =
+    and+ dry_run =
       Arg.(value
            & flag
            & info ["dry-run"]
                ~doc:"Only display the file operations that would be performed."
           )
-    and pkgs =
+    and+ pkgs =
       Arg.(value & pos_all package_name [] name_)
     in
     Common.set_common common ~targets:[];
     let log = Log.create common in
     Scheduler.go ~log ~common (fun () ->
-      Import.Main.scan_workspace ~log common >>= fun workspace ->
+      let open Fiber.O in
+      let* workspace = Import.Main.scan_workspace ~log common in
       let pkgs =
         match pkgs with
         | [] -> Package.Name.Map.keys workspace.conf.packages
@@ -208,8 +209,9 @@ let install_uninstall ~what =
       let (module Ops) = file_operations ~dry_run in
       Fiber.parallel_iter install_files_by_context
         ~f:(fun (context, install_files) ->
-          get_dirs context ~prefix_from_command_line ~libdir_from_command_line
-          >>| fun (prefix, libdir) ->
+          let+ (prefix, libdir) =
+            get_dirs context ~prefix_from_command_line ~libdir_from_command_line
+          in
           List.iter install_files ~f:(fun (package, path) ->
             let entries = Install.load_install_file path in
             let paths =

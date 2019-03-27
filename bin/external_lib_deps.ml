@@ -1,6 +1,5 @@
 open Stdune
 open Import
-open Fiber.O
 
 let format_external_libs libs =
   Lib_name.Map.to_list libs
@@ -109,23 +108,23 @@ let run ~lib_deps ~by_dir ~setup ~only_missing ~sexp =
       end)
 
 let term =
-  let%map common = Common.term
-  and only_missing =
+  let+ common = Common.term
+  and+ only_missing =
     Arg.(value
          & flag
          & info ["missing"]
              ~doc:{|Only print out missing dependencies|})
-  and targets =
+  and+ targets =
     Arg.(non_empty
          & pos_all string []
          & Arg.info [] ~docv:"TARGET")
-  and by_dir =
+  and+ by_dir =
     Arg.(value
          & flag
          & info ["unstable-by-dir"]
              ~doc:{|Print dependencies per directory
                     (this feature is currently unstable)|})
-  and sexp =
+  and+ sexp =
     Arg.(value
          & flag
          & info ["sexp"]
@@ -135,10 +134,11 @@ let term =
   let log = Log.create common in
   let setup, lib_deps =
     Scheduler.go ~log ~common (fun () ->
-      Import.Main.setup ~log common ~external_lib_deps_mode:true >>= fun setup ->
+      let open Fiber.O in
+      let* setup = Import.Main.setup ~log common ~external_lib_deps_mode:true in
       let targets = Target.resolve_targets_exn ~log common setup targets in
       let request = Target.request setup targets in
-      Build_system.all_lib_deps ~request >>| fun deps ->
+      let+ deps = Build_system.all_lib_deps ~request in
       (setup, deps))
   in
   let failure = run ~by_dir ~setup ~lib_deps ~sexp ~only_missing in

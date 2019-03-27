@@ -1,6 +1,5 @@
 open Stdune
 open Import
-open Fiber.O
 
 let doc = "Dump internal rules."
 
@@ -30,6 +29,7 @@ let print_rule_makefile ppf (rule : Build_system.Rule.t) =
       ; Action.for_shell rule.action
       ]
   in
+  let eval_pred = Build_system.eval_pred in
   Format.fprintf ppf
     "@[<hov 2>@{<makefile-stuff>%a:%t@}@]@,\
      @<0>\t@{<makefile-action>%a@}@,@,"
@@ -37,7 +37,7 @@ let print_rule_makefile ppf (rule : Build_system.Rule.t) =
        Format.pp_print_string ppf (Path.to_string p)))
     (Path.Set.to_list rule.targets)
     (fun ppf ->
-       Path.Set.iter (Deps.paths rule.deps) ~f:(fun dep ->
+       Path.Set.iter (Dep.Set.paths rule.deps ~eval_pred) ~f:(fun dep ->
          Format.fprintf ppf "@ %s" (Path.to_string dep)))
     Pp.pp
     (Action_to_sh.pp action)
@@ -52,7 +52,7 @@ let print_rule_sexp ppf (rule : Build_system.Rule.t) =
   let sexp =
     Dune_lang.Encoder.record (
       List.concat
-        [ [ "deps"   , Deps.to_sexp rule.deps
+        [ [ "deps"   , Dep.Set.encode rule.deps
           ; "targets", paths rule.targets ]
         ; (match rule.context with
            | None -> []
@@ -70,7 +70,7 @@ module Syntax = struct
 
   let term =
     let doc = "Output the rules in Makefile syntax." in
-    let%map makefile = Arg.(value & flag & info ["m"; "makefile"] ~doc) in
+    let+ makefile = Arg.(value & flag & info ["m"; "makefile"] ~doc) in
     if makefile then
       Makefile
     else
@@ -89,20 +89,20 @@ end
 
 
 let term =
-  let%map common = Common.term
-  and out =
+  let+ common = Common.term
+  and+ out =
     Arg.(value
          & opt (some string) None
          & info ["o"] ~docv:"FILE"
              ~doc:"Output to a file instead of stdout.")
-  and recursive =
+  and+ recursive =
     Arg.(value
          & flag
          & info ["r"; "recursive"]
              ~doc:"Print all rules needed to build the transitive \
                    dependencies of the given targets.")
-  and syntax = Syntax.term
-  and targets =
+  and+ syntax = Syntax.term
+  and+ targets =
     Arg.(value
          & pos_all string []
          & Arg.info [] ~docv:"TARGET")
@@ -111,8 +111,9 @@ let term =
   Common.set_common common ~targets;
   let log = Log.create common in
   Scheduler.go ~log ~common (fun () ->
-    Import.Main.setup ~log common ~external_lib_deps_mode:true
-    >>= fun setup ->
+    let open Fiber.O in
+    let* setup =
+      Import.Main.setup ~log common ~external_lib_deps_mode:true in
     let request =
       match targets with
       | [] ->
@@ -121,8 +122,7 @@ let term =
         Target.resolve_targets_exn ~log common setup targets
         |> Target.request setup
     in
-    Build_system.evaluate_rules ~request ~recursive
-    >>= fun rules ->
+    let* rules = Build_system.evaluate_rules ~request ~recursive in
     let print oc =
       let ppf = Format.formatter_of_out_channel oc in
       Syntax.print_rules syntax ppf rules;

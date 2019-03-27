@@ -39,6 +39,8 @@ type t
 
 val to_sexp : t Sexp.Encoder.t
 
+val to_dyn : t -> Dyn.t
+
 val compare : t -> t -> Ordering.t
 (** a directory is smaller than its descendants *)
 
@@ -103,7 +105,8 @@ val extend_basename : t -> suffix:string -> t
       extract_build_context "_build/blah/foo/bar" = Some ("blah", "foo/bar")
     ]}
 *)
-val extract_build_context : t -> (string * t) option
+val extract_build_context     : t -> (string * t) option
+val extract_build_context_exn : t -> (string * t)
 
 (** Same as [extract_build_context] but return the build context as a path:
 
@@ -111,7 +114,8 @@ val extract_build_context : t -> (string * t) option
       extract_build_context "_build/blah/foo/bar" = Some ("_build/blah", "foo/bar")
     ]}
 *)
-val extract_build_context_dir : t -> (t * t) option
+val extract_build_context_dir     : t -> (t * t) option
+val extract_build_context_dir_exn : t -> (t * t)
 
 (** Drop the "_build/blah" prefix *)
 val drop_build_context : t -> t option

@@ -196,9 +196,9 @@ module Opam_package = struct
   let decode_pkg =
     Dune_lang.Decoder.(Syntax.since Stanza.syntax (1, 7) >>>
      fields (
-       let%map name = field "name" string 
-       and synopsis = field "synopsis" string
-       and constraints = field ~default:[] "constraints" (repeat decode_constraint) in
+       let+ name = field "name" string in
+       let+ synopsis = field "synopsis" string in
+       let+ constraints = field ~default:[] "constraints" (repeat decode_constraint) in
        { name; synopsis; constraints }))
 
   let pp_pkg fmt { name; synopsis; constraints } =
@@ -234,9 +234,9 @@ module Opam_package = struct
   let decode =
     Dune_lang.Decoder.(Syntax.since Stanza.syntax (1, 7) >>>
      fields (
-     let%map tags = field ~default:[] "tags" (repeat string) 
-     and constraints = field ~default:[] "constraints" (repeat decode_constraint)
-     and packages = multi_field "package" decode_pkg in
+     let+ tags = field ~default:[] "tags" (repeat string) in
+     let+ constraints = field ~default:[] "constraints" (repeat decode_constraint) in
+     let+ packages = multi_field "package" decode_pkg in
      { tags; constraints; packages }
      )
     )
@@ -257,7 +257,12 @@ type t =
   ; extension_args  : Univ_map.t
   ; parsing_context : Univ_map.t
   ; implicit_transitive_deps : bool
+  ; dune_version    : Syntax.Version.t
+  ; allow_approx_merlin : bool
   }
+
+let equal = (==)
+let hash = Hashtbl.hash
 
 let packages t = t.packages
 let version t = t.version
@@ -270,10 +275,13 @@ let root t = t.root
 let stanza_parser t = t.stanza_parser
 let file t = t.project_file.file
 let implicit_transitive_deps t = t.implicit_transitive_deps
+let allow_approx_merlin t = t.allow_approx_merlin
 
-  let pp fmt { name ; root ; version ; source; license; authors; opam
-           ; project_file ; parsing_context = _ ; extension_args = _
-           ; stanza_parser = _ ; packages ; implicit_transitive_deps } =
+let pp fmt { name ; root ; version ; source; license; authors
+           ; project_file ; parsing_context = _
+           ; extension_args = _; stanza_parser = _ ; packages
+           ; implicit_transitive_deps ; dune_version
+           ; allow_approx_merlin } =
   Fmt.record fmt
     [ "name", Fmt.const Name.pp name
     ; "root", Fmt.const Path.Local.pp root
@@ -289,6 +297,9 @@ let implicit_transitive_deps t = t.implicit_transitive_deps
         (Package.Name.Map.to_list packages)
     ; "implicit_transitive_deps",
       Fmt.const Format.pp_print_bool implicit_transitive_deps
+    ; "dune_version", Fmt.const Syntax.Version.pp dune_version
+    ; "allow_approx_merlin"
+    , Fmt.const Format.pp_print_bool allow_approx_merlin
     ]
 
 let find_extension_args t key =
@@ -311,6 +322,10 @@ module Project_file_edit = struct
 
   let notify_user s =
     kerrf ~f:print_to_console "@{<warning>Info@}: %s\n" s
+
+  let lang_stanza () =
+    let ver = (Lang.get_exn "dune").version in
+    sprintf "(lang dune %s)" (Syntax.Version.to_string ver)
 
   let ensure_exists t =
     if t.exists then
@@ -351,6 +366,8 @@ module Project_file_edit = struct
         if len > 0 && s.[len - 1] <> '\n' then output_char oc '\n'));
     what
 end
+
+let lang_stanza = Project_file_edit.lang_stanza
 
 let ensure_project_file_exists t =
   Project_file_edit.ensure_exists t.project_file
@@ -395,7 +412,7 @@ module Extension = struct
 
   let register_simple ?experimental syntax stanzas =
     let unit_stanzas =
-      let%map r = stanzas in
+      let+ r = stanzas in
       ((), r)
     in
     let unit_to_sexp () = Sexp.List [] in
@@ -498,7 +515,7 @@ let interpret_lang_and_extensions ~(lang : Lang.Instance.t)
               let extension = instance.extension in
               let Extension.Extension e = extension in
               let args =
-                let%map (arg, stanzas) =
+                let+ (arg, stanzas) =
                   Dune_lang.Decoder.set_many parsing_context e.stanzas
                 in
                 let new_args_acc =
@@ -523,7 +540,8 @@ let key =
     (fun { name; root; version; project_file; source
          ; license; authors; opam
          ; stanza_parser = _; packages = _ ; extension_args = _
-         ; parsing_context ; implicit_transitive_deps } ->
+         ; parsing_context ; implicit_transitive_deps ; dune_version
+         ; allow_approx_merlin } ->
       Sexp.Encoder.record
         [ "name", Name.to_sexp name
         ; "root", Path.Local.to_sexp root
@@ -535,6 +553,9 @@ let key =
         ; "project_file", Project_file.to_sexp project_file
         ; "parsing_context", Univ_map.to_sexp parsing_context
         ; "implicit_transitive_deps", Sexp.Encoder.bool implicit_transitive_deps
+        ; "dune_version", Syntax.Version.to_sexp dune_version
+        ; "allow_approx_merlin"
+        , Sexp.Encoder.bool allow_approx_merlin
         ])
 
 let set t = Dune_lang.Decoder.set key t
@@ -578,6 +599,8 @@ let anonymous = lazy (
   ; project_file
   ; extension_args
   ; parsing_context
+  ; dune_version = lang.version
+  ; allow_approx_merlin = true
   })
 
 let default_name ~dir ~packages =
@@ -601,33 +624,36 @@ let default_name ~dir ~packages =
         name
 
 let name_field ~dir ~packages =
-    let%map name = field_o "name" Name.decode in
+    let+ name = field_o "name" Name.decode in
     match name with
     | Some x -> x
     | None   -> default_name ~dir ~packages
 
 let parse ~dir ~lang ~packages ~file =
   fields
-    (let%map name = name_field ~dir ~packages
-     and version = field_o "version" string
-     and source = field_o "source" Source_kind.decode
-     and opam = field_o "opam" Opam_package.decode
-     and authors = field ~default:[] "authors" (Syntax.since Stanza.syntax (1, 7) >>> repeat string)
-     and license = field_o "license" (Syntax.since Stanza.syntax (1, 7) >>> string)
-     and explicit_extensions =
+    (let+ name = name_field ~dir ~packages
+     and+ version = field_o "version" string
+     and+ source = field_o "source" Source_kind.decode
+     and+ opam = field_o "opam" Opam_package.decode
+     and+ authors = field ~default:[] "authors" (Syntax.since Stanza.syntax (1, 7) >>> repeat string)
+     and+ license = field_o "license" (Syntax.since Stanza.syntax (1, 7) >>> string)
+     and+ explicit_extensions =
        multi_field "using"
-         (let%map loc = loc
-          and name = located string
-          and ver = located Syntax.Version.decode
-          and parse_args = capture
+         (let+ loc = loc
+          and+ name = located string
+          and+ ver = located Syntax.Version.decode
+          and+ parse_args = capture
           in
           (* We don't parse the arguments quite yet as we want to set
              the version of extensions before parsing them. *)
           Extension.instantiate ~loc ~parse_args name ver)
-     and implicit_transitive_deps =
+     and+ implicit_transitive_deps =
        field_o_b "implicit_transitive_deps"
          ~check:(Syntax.since Stanza.syntax (1, 7))
-     and () = Versioned_file.no_more_lang
+     and+ allow_approx_merlin =
+       field_o_b "allow_approximate_merlin"
+         ~check:(Syntax.since Stanza.syntax (1, 9))
+     and+ () = Versioned_file.no_more_lang
      in
      let project_file : Project_file.t =
        { file
@@ -641,6 +667,8 @@ let parse ~dir ~lang ~packages ~file =
      let implicit_transitive_deps =
        Option.value implicit_transitive_deps ~default:true
      in
+     let allow_approx_merlin =
+       Option.value ~default:false allow_approx_merlin in
      { name
      ; root = get_local_path dir
      ; version
@@ -654,6 +682,8 @@ let parse ~dir ~lang ~packages ~file =
      ; extension_args
      ; parsing_context
      ; implicit_transitive_deps
+     ; dune_version = lang.version
+     ; allow_approx_merlin
      })
 
 let load_dune_project ~dir packages =
@@ -686,13 +716,15 @@ let make_jbuilder_project ~dir packages =
   ; extension_args
   ; parsing_context
   ; implicit_transitive_deps = true
+  ; dune_version = lang.version
+  ; allow_approx_merlin = true
   }
 
 let read_name file =
   load file ~f:(fun _lang ->
     fields
-      (let%map name = field_o "name" string
-       and () = junk_everything
+      (let+ name = field_o "name" (located string)
+       and+ () = junk_everything
        in
        name))
 
@@ -723,6 +755,8 @@ let load ~dir ~files =
     Some (make_jbuilder_project ~dir packages)
   else
     None
+
+let dune_version t = t.dune_version
 
 let set_parsing_context t parser =
   Dune_lang.Decoder.set_many t.parsing_context parser

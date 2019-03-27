@@ -11,6 +11,12 @@ open Dune_file
 
 type t
 
+val equal : t -> t -> bool
+val hash : t -> int
+
+val to_dyn : t -> Dyn.t
+val to_sexp : t -> Sexp.t
+
 val create
   :  context:Context.t
   -> ?host:t
@@ -28,7 +34,6 @@ val packages  : t -> Package.t Package.Name.Map.t
 val libs_by_package : t -> (Package.t * Lib.Set.t) Package.Name.Map.t
 val file_tree : t -> File_tree.t
 val artifacts : t -> Artifacts.t
-val cxx_flags : t -> string list
 val build_dir : t -> Path.t
 val profile   : t -> string
 val host : t -> t
@@ -50,6 +55,20 @@ val ocaml_flags
   -> dir:Path.t
   -> Buildable.t
   -> Ocaml_flags.t
+
+val c_flags
+  :  t
+  -> dir:Path.t
+  -> expander:Expander.t
+  -> lib:Library.t
+  -> (unit, string list) Build.t
+
+val cxx_flags
+  :  t
+  -> dir:Path.t
+  -> expander:Expander.t
+  -> lib:Library.t
+  -> (unit, string list) Build.t
 
 (** Binaries that are symlinked in the associated .bin directory of [dir]. This
     associated directory is [Path.relative dir ".bin"] *)

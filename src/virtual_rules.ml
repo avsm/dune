@@ -1,6 +1,35 @@
 open Import
 open! No_io
 
+module Pp_spec : sig
+  type t
+
+  val make
+    :  Dune_file.Preprocess.t Dune_file.Per_module.t
+    -> Ocaml_version.t
+    -> t
+
+  val pped_modules : t -> Module.Name_map.t -> Module.Name_map.t
+end = struct
+  type t = (Module.t -> Module.t) Dune_file.Per_module.t
+
+  let make preprocess v =
+    Dune_file.Per_module.map preprocess ~f:(fun pp ->
+      match Dune_file.Preprocess.remove_future_syntax pp v with
+      | No_preprocessing -> Module.ml_source
+      | Action (_, _) ->
+        fun m -> Module.ml_source (Module.pped m)
+      | Pps { loc = _; pps = _; flags = _; staged } ->
+        if staged then
+          Module.ml_source
+        else
+          fun m -> Module.pped (Module.ml_source m))
+
+  let pped_modules (t : t) modules =
+    Module.Name.Map.map modules ~f:(fun (m : Module.t) ->
+      Dune_file.Per_module.get t (Module.name m) m)
+end
+
 let setup_copy_rules_for_impl ~sctx ~dir vimpl =
   let ctx = Super_context.context sctx in
   let vlib = Vimpl.vlib vimpl in
@@ -152,7 +181,7 @@ let external_dep_graph sctx ~impl_cm_kind ~vlib_obj_dir ~impl_obj_dir
       | Impl -> impl_cm_kind
       | Intf -> Cm_kind.Cmi
     in
-    let deps_from_objnfo ~for_module (ocamlobjinfo : Ocamlobjinfo.t) =
+    let deps_from_objinfo ~for_module (ocamlobjinfo : Ocamlobjinfo.t) =
       Module.Name.Set.to_list ocamlobjinfo.intf
       |> List.filter_map ~f:(fun dep ->
         match Module.Name.split_alias_prefix dep, wrapped with
@@ -195,7 +224,7 @@ let external_dep_graph sctx ~impl_cm_kind ~vlib_obj_dir ~impl_obj_dir
             Super_context.add_rule sctx ~dir:impl_obj_dir write;
             let open Build.O in
             Build.memoize "ocamlobjinfo" @@
-            read >>^ deps_from_objnfo ~for_module:m
+            read >>^ deps_from_objinfo ~for_module:m
         in
         m, deps)))
 
@@ -225,7 +254,14 @@ let impl sctx ~dir ~(lib : Dune_file.Library.t) ~scope ~modules =
           let dir_contents =
             Dir_contents.get sctx ~dir:(Lib.src_dir vlib) in
           let modules =
-            Dir_contents.modules_of_library dir_contents ~name
+            let pp_spec =
+              Pp_spec.make lib.buildable.preprocess
+                (Super_context.context sctx).version
+            in
+            let modules = Dir_contents.modules_of_library dir_contents ~name in
+            Lib_modules.modules modules
+            |> Pp_spec.pped_modules pp_spec
+            |> Lib_modules.set_modules modules
           in
           let foreign_objects =
             let ext_obj = (Super_context.context sctx).ext_obj in
@@ -249,10 +285,7 @@ let impl sctx ~dir ~(lib : Dune_file.Library.t) ~scope ~modules =
             Utils.library_object_directory ~dir (snd lib.name) in
           let impl_cm_kind =
             let { Mode.Dict. byte; native = _ } = Lib.modes vlib in
-            if byte then
-              Mode.cm_kind Byte
-            else
-              Mode.cm_kind Native
+            Mode.cm_kind (if byte then Byte else Native)
           in
           external_dep_graph sctx ~impl_cm_kind ~vlib_obj_dir ~impl_obj_dir
             ~vlib_modules

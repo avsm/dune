@@ -200,8 +200,9 @@ to use the :ref:`include_subdirs` stanza.
 - ``(allow_overlapping_dependencies)`` allows external dependencies to
   overlap with libraries that are present in the workspace
 
-- ``(no_keep_locs)`` undocumented, it is a necessary hack until this
-  is implemented: https://github.com/ocaml/dune/issues/921
+- ``(no_keep_locs)`` does nothing. It used to be a necessary hack when
+  we were waiting for proper support for virtual libraries. Do not use
+  in new code, it will be deleted in dune 2.0
 
 Note that when binding C libraries, dune doesn't provide special support for
 tools such as ``pkg-config``, however it integrates easily with configurator_ by
@@ -457,6 +458,10 @@ field. The following modes are available:
   ``dune clean`` will remove the promoted files from the source
   tree
 
+- ``(promote-into <dir>)`` (resp. ``(promote-until-clean-into
+  <dir>)``) is the same as ``promote`` (resp. ``promote-until-clean``)
+  except that the files are promoted in ``<dir>`` instead of the
+  current directory. This feature is available since Dune 1.8.
 
 There are two use cases for promote rules. The first one is when the
 generated code is easier to review than the generator, so it's easier
@@ -604,7 +609,7 @@ The typical use of the ``alias`` stanza is to define tests:
 
 See the section about :ref:`running-tests` for details.
 
-Note that if your project contains several packages and you run test the tests
+Note that if your project contains several packages and you run the tests
 from the opam file using a ``build-test`` field, then all your ``runtest`` alias
 stanzas should have a ``(package ...)`` field in order to partition the set of
 tests.
@@ -753,8 +758,8 @@ to ``expect_test.expected``.
 
 The optional fields that are supported are a subset of the alias and executables
 fields. In particular, all fields except for ``public_names`` are supported from
-the `executables stanza <shared-exe-fields>`_. Alias fields apart from ``name``
-are allowed.
+the :ref:`executables stanza <shared-exe-fields>`. Alias fields apart from
+``name`` are allowed.
 
 test
 ----
@@ -793,6 +798,10 @@ directory. You can use ``_`` to match any build profile.
 Fields supported in ``<settings>`` are:
 
 - any OCaml flags field, see `OCaml flags`_ for more details.
+
+- ``(c_flags <flags>)`` and ``(cxx_flags <flags>)``
+  to specify compilation flags for C and C++ stubs, respectively.
+  See `library`_ for more details.
 
 - ``(env-vars (<var1> <val1>) .. (<varN> <valN>))``. This will add the
   corresponding variables to the environment in which the build commands are
@@ -1218,6 +1227,9 @@ Dune accepts three kinds of preprocessing:
 - ``(staged_pps <ppx-rewriters-and-flags>)`` is similar to ``(pps ...)``
   but behave slightly differently and is needed for certain ppx rewriters
   (see below for details)
+- ``future_syntax`` is a special value that brings some of the newer
+  OCaml syntaxes to older compilers. See :ref:`Future syntax
+  <future-syntax>` for more details
 
 Dune normally assumes that the compilation pipeline is sequenced as
 follow:
@@ -1314,6 +1326,21 @@ For instance:
     (preprocess (per_module
                  (((action (run ./pp.sh X=1 %{input-file})) foo bar))
                  (((action (run ./pp.sh X=2 %{input-file})) baz))))
+
+.. _future-syntax:
+
+Future syntax
+~~~~~~~~~~~~~
+
+The ``future_syntax`` preprocessing specification is equivalent to
+``no_preprocessing`` when using one of the most recent versions of the
+compiler. When using an older one, it is a shim preprocessor that
+backports some of the newer syntax elements. This allows you to use some of
+the new OCaml features while keeping compatibility with older
+compilers.
+
+One example of supported syntax is the custom let-syntax that was
+introduced in 4.08, allowing the user to define custom let operators.
 
 .. _deps-field:
 

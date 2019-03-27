@@ -15,6 +15,16 @@ module Preprocess : sig
     | No_preprocessing
     | Action of Loc.t * Action_dune_lang.t
     | Pps    of pps
+    | Future_syntax of Loc.t
+
+  module Without_future_syntax : sig
+    type t =
+      | No_preprocessing
+      | Action of Loc.t * Action_dune_lang.t
+      | Pps    of pps
+  end
+
+  val remove_future_syntax : t -> Ocaml_version.t -> Without_future_syntax.t
 end
 
 module Per_module : Per_item.S with type key = Module.Name.t
@@ -97,19 +107,15 @@ module Auto_format : sig
   type language =
     | Ocaml
     | Reason
+    | Dune
 
-  type enabled_for =
-    | Default
-    | Only of language list
-
-  type t =
-    { loc : Loc.t
-    ; enabled_for : enabled_for
-    }
-
-  val syntax : Syntax.t
+  type t
 
   val key : t Dune_project.Extension.t
+
+  val loc : t -> Loc.t
+
+  val includes : t -> language -> bool
 end
 
 module Buildable : sig
@@ -215,6 +221,8 @@ module Library : sig
     ; dune_version             : Syntax.Version.t
     ; virtual_modules          : Ordered_set_lang.t option
     ; implements               : (Loc.t * Lib_name.t) option
+    ; variant                  : Variant.t option
+    ; default_implementation   : (Loc.t * Lib_name.t) option
     ; private_modules          : Ordered_set_lang.t option
     ; stdlib                   : Stdlib.t option
     }
@@ -280,6 +288,7 @@ module Executables : sig
     ; link_deps  : Dep_conf.t list
     ; modes      : Link_mode.Set.t
     ; buildable  : Buildable.t
+    ; variants   : (Loc.t * Variant.Set.t) option
     }
 end
 
@@ -291,14 +300,28 @@ module Rule : sig
   end
 
   module Mode : sig
+    module Promotion_lifetime : sig
+      type t =
+        | Unlimited
+        (** The promoted file will be deleted by [dune clean] *)
+        | Until_clean
+    end
+
+    module Into : sig
+      type t =
+        { loc : Loc.t
+        ; dir : string
+        }
+    end
+
     type t =
       | Standard
       (** Only use this rule if  the source files don't exist. *)
       | Fallback
-      (** Silently promote the targets to the source tree. *)
-      | Promote
-      (** Same as [Promote] but [jbuilder clean] must delete the file *)
-      | Promote_but_delete_on_clean
+      (** Silently promote the targets to the source tree. If the argument is
+          [Some { dir ; _ }], promote them into [dir] rather than the current
+          directory. *)
+      | Promote of Promotion_lifetime.t * Into.t option
       (** Same as [Standard] however this is not a rule stanza, so it
           is not possible to add a [(fallback)] field to the rule. *)
       | Not_a_rule_stanza
@@ -376,6 +399,7 @@ module Toplevel : sig
   type t =
     { name : string
     ; libraries : (Loc.t * Lib_name.t) list
+    ; variants : (Loc.t * Variant.Set.t) option
     ; loc : Loc.t
     }
 end
@@ -403,6 +427,15 @@ module Stanzas : sig
 
   type syntax = OCaml | Plain
 
+  (** [parse ~file ~kind project stanza_exprs] is a list of [Stanza.t]s derived
+      from decoding the [stanza_exprs] from [Dune_lang.Ast.t]s to [Stanza.t]s
+      and combining those with the stanzas parsed from the supplied dune [file].
+
+      The stanzas are parsed in the context of the dune [project].
+
+      The syntax [kind] determines whether the expected syntax is either the
+      depreciated jbuilder syntax or the version of dune syntax specified in the
+      [project]. *)
   val parse
     :  file:Path.t
     -> kind:Dune_lang.Syntax.t

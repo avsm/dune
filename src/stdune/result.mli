@@ -13,9 +13,21 @@ val ok_exn : ('a, exn) t -> 'a
 
 val try_with : (unit -> 'a) -> ('a, exn) t
 
+val equal
+  :  ('a -> 'a -> bool)
+  -> ('b -> 'b -> bool)
+  -> ('a, 'b) t
+  -> ('a, 'b) t
+  -> bool
+
+val hash : ('a -> int) -> ('b -> int) -> ('a, 'b) t -> int
+
 module O : sig
   val ( >>| ) : ('a, 'error) t -> ('a -> 'b) -> ('b, 'error) t
   val ( >>= ) : ('a, 'error) t -> ('a -> ('b, 'error) t) -> ('b, 'error) t
+
+  val (let*) : ('a, 'error) t -> ('a -> ('b, 'error) t) -> ('b, 'error) t
+  val (let+) : ('a, 'error) t -> ('a -> 'b) -> ('b, 'error) t
 end
 
 val map  : ('a, 'error) t -> f:('a -> 'b) -> ('b, 'error) t
@@ -23,8 +35,12 @@ val bind : ('a, 'error) t -> f:('a -> ('b, 'error) t) -> ('b, 'error) t
 
 val map_error : ('a, 'error1) t -> f:('error1 -> 'error2) -> ('a, 'error2) t
 
+val to_option : ('a, 'error) t -> 'a option
+
 (** Produce [Error <message>] *)
 val errorf : ('a, unit, string, (_, string) t) format4 -> 'a
+
+val iter : ('a, _) t -> f:('a -> unit) -> unit
 
 (** For compatibility with some other code *)
 type ('a, 'error) result = ('a, 'error) t
@@ -46,4 +62,8 @@ module List : sig
     -> f:('acc -> 'a -> ('acc, 'c) result)
     -> init:'acc
     -> ('acc, 'c) result
+end
+
+module Option : sig
+  val iter : ('a, 'e) t option -> f:('a -> (unit, 'e) t) -> (unit, 'e) t
 end

@@ -1,3 +1,5 @@
+open! Dune_result
+
 type t
 
 val create
@@ -79,16 +81,34 @@ module Pkg_config : sig
   type configurator = t
   type t
 
-  (** Returns [None] if pkg-config is not installed *)
   val get : configurator -> t option
+  (** Search pkg-config in the PATH.  Returns [None] if pkg-config is
+     not found. *)
 
   type package_conf =
     { libs   : string list
     ; cflags : string list
     }
 
-  (** Returns [None] if [package] is not available *)
   val query : t -> package:string -> package_conf option
+  (** [query t ~package] query pkg-config for the [package].  The
+     package may contain a version constraint.  For example
+     "gtk+-3.0 >= 3.18".  Returns [None] if [package] is not available  *)
+
+  val query_expr : t
+    -> package:string
+    -> expr:string
+    -> package_conf option
+  [@@ocaml.deprecated "please use [query_expr_err]"]
+
+  val query_expr_err : t
+    -> package:string
+    -> expr:string
+    -> (package_conf, string) Result.t
+  (** [query_expr_err t ~package ~expr] query pkg-config for the
+     [package]. [expr] may contain a version constraint, for example
+     "gtk+-3.0 >= 3.18". [package] should be just the name of the
+     package. Returns [Error error_msg] if [package] is not available *)
 end with type configurator := t
 
 module Flags : sig
@@ -122,6 +142,39 @@ val which : t -> string -> string option
 (** [which t prog] seek [prog] in the PATH and return the name
    of the program prefixed with the first path where it is found.
    Return [None] the the program is not found. *)
+
+
+(** Execute external programs. *)
+module Process : sig
+  type result =
+    { exit_code : int
+    ; stdout    : string
+    ; stderr    : string
+    }
+
+  val run : t -> ?dir:string -> ?env:string list ->
+            string -> string list -> result
+  (** [run t prog args] runs [prog] with arguments [args] and returns
+     its exit status together with the content of stdout and stderr.
+     The action is logged.
+
+     @param dir change to [dir] before running the command.
+     @param env specify additional environment variables as a list of
+     the form NAME=VALUE. *)
+
+  val run_capture_exn : t -> ?dir:string -> ?env:string list ->
+                        string -> string list -> string
+  (** [run_capture_exn t prog args] same as [run t prog args] but
+     returns [stdout] and {!die} if the error code is nonzero or there
+     is some output on [stderr].  *)
+
+  val run_ok : t -> ?dir:string -> ?env:string list ->
+               string -> string list -> bool
+  (** [run_ok t prog args] same as [run t prog args] but only cares
+     whether the execution terminated successfully (i.e., returned an
+     error code of [0]).  *)
+end
+
 
 (** Typical entry point for configurator programs *)
 val main

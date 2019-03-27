@@ -35,6 +35,8 @@ end
 
 val compare : t -> t -> Ordering.t
 
+val equal : t -> t -> bool
+
 val pp : t Fmt.t
 
 val pp_quoted : t Fmt.t
@@ -58,3 +60,5 @@ end
 val to_sexp : t Sexp.Encoder.t
 
 val nest : t -> t -> t
+
+val to_dyn : t -> Dyn.t

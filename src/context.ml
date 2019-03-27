@@ -11,12 +11,14 @@ module Kind = struct
   end
   type t = Default | Opam of Opam.t
 
-  let to_sexp : t -> Sexp.t = function
-    | Default -> Sexp.Encoder.string "default"
+  let to_dyn : t -> Dyn.t =
+    function
+    | Default -> Dyn.Encoder.string "default"
     | Opam o  ->
-      Sexp.Encoder.(record [ "root"  , option string o.root
-                           ; "switch", string o.switch
-                           ])
+      Dyn.Encoder.(record
+                     [ "root"  , option string o.root
+                     ; "switch", string o.switch
+                     ])
 end
 
 module Env_nodes = struct
@@ -30,8 +32,9 @@ module Env_nodes = struct
       let open Option.O in
       Option.value
         ~default:Env.empty
-        (l >>= fun stanza ->
-         Dune_env.Stanza.find stanza ~profile >>| fun env ->
+        (let* stanza = l in
+         let+ env = Dune_env.Stanza.find stanza ~profile
+         in
          env.env_vars)
     in
     Env.extend_env
@@ -100,15 +103,19 @@ type t =
   ; which_cache             : (string, Path.t option) Hashtbl.t
   }
 
-let to_sexp t =
-  let open Sexp.Encoder in
-  let path = Path.to_sexp in
+let equal x y = String.equal x.name y.name
+let hash t = String.hash t.name
+
+let to_dyn t : Dyn.t =
+  let open Dyn.Encoder in
+  let path = Path.to_dyn in
   record
-    [ "name", string t.name
-    ; "kind", Kind.to_sexp t.kind
-    ; "profile", string t.profile
-    ; "merlin", bool t.merlin
-    ; "for_host", option string (Option.map t.for_host ~f:(fun t -> t.name))
+    [ "name", String t.name
+    ; "kind", Kind.to_dyn t.kind
+    ; "profile", String t.profile
+    ; "merlin", Bool t.merlin
+    ; "for_host",
+      option string (Option.map t.for_host ~f:(fun t -> t.name))
     ; "build_dir", path t.build_dir
     ; "toplevel_path", option path t.toplevel_path
     ; "ocaml_bin", path t.ocaml_bin
@@ -117,17 +124,19 @@ let to_sexp t =
     ; "ocamlopt", option path t.ocamlopt
     ; "ocamldep", path t.ocamldep
     ; "ocamlmklib", path t.ocamlmklib
-    ; "env", Env.to_sexp (Env.diff t.env Env.initial)
+    ; "env", Env.to_dyn (Env.diff t.env Env.initial)
     ; "findlib_path", list path (Findlib.paths t.findlib)
-    ; "arch_sixtyfour", bool t.arch_sixtyfour
+    ; "arch_sixtyfour", Bool t.arch_sixtyfour
     ; "natdynlink_supported",
-      bool (Dynlink_supported.By_the_os.get t.natdynlink_supported)
+      Bool (Dynlink_supported.By_the_os.get t.natdynlink_supported)
     ; "supports_shared_libraries",
-      bool (Dynlink_supported.By_the_os.get t.supports_shared_libraries)
-    ; "opam_vars", Hashtbl.to_sexp string string t.opam_var_cache
-    ; "ocaml_config", Ocaml_config.to_sexp t.ocaml_config
-    ; "which", Hashtbl.to_sexp string (option path) t.which_cache
+      Bool (Dynlink_supported.By_the_os.get t.supports_shared_libraries)
+    ; "opam_vars", Hashtbl.to_dyn string string t.opam_var_cache
+    ; "ocaml_config", Ocaml_config.to_dyn t.ocaml_config
+    ; "which", Hashtbl.to_dyn string (option path) t.which_cache
     ]
+
+let to_sexp t = Dyn.to_sexp (to_dyn t)
 
 let compare a b = compare a.name b.name
 
@@ -196,8 +205,7 @@ let ocamlfind_printconf_path ~env ~ocamlfind ~toolchain =
     | None -> args
     | Some s -> "-toolchain" :: s :: args
   in
-  Process.run_capture_lines ~env Strict ocamlfind args
-  >>| fun l ->
+  let+ l = Process.run_capture_lines ~env Strict ocamlfind args in
   List.map l ~f:Path.of_filename_relative_to_initial_cwd
 
 let create ~(kind : Kind.t) ~path ~env ~env_nodes ~name ~merlin ~targets
@@ -230,13 +238,13 @@ let create ~(kind : Kind.t) ~path ~env ~env_nodes ~name ~merlin ~targets
   in
 
   let create_one ~name ~implicit ~findlib_toolchain ~host ~merlin =
-    (match findlib_toolchain with
-     | None -> Fiber.return None
-     | Some toolchain ->
-       Lazy.force findlib_config_path >>| fun path ->
-       Some (Findlib.Config.load path ~toolchain ~context:name))
-    >>= fun findlib_config ->
-
+    let* findlib_config =
+      match findlib_toolchain with
+      | None -> Fiber.return None
+      | Some toolchain ->
+        let+ path = Lazy.force findlib_config_path in
+        Some (Findlib.Config.load path ~toolchain ~context:name)
+    in
     let get_tool_using_findlib_config prog =
       let open Option.O in
       findlib_config >>= fun conf ->
@@ -331,16 +339,17 @@ let create ~(kind : Kind.t) ~path ~env ~env_nodes ~name ~merlin ~targets
       | Error (Makefile_config file, msg) ->
         Errors.fail (Loc.in_file file) "%s" msg
     in
-    Fiber.fork_and_join
-      findlib_paths
-      (fun () ->
-         Process.run_capture_lines ~env Strict ocamlc ["-config"]
-         >>| fun lines ->
-         ocaml_config_ok_exn
-           (match Ocaml_config.Vars.of_lines lines with
-            | Ok vars -> Ocaml_config.make vars
-            | Error msg -> Error (Ocamlc_config, msg)))
-    >>= fun (findlib_paths, ocfg) ->
+    let* (findlib_paths, ocfg) =
+      Fiber.fork_and_join
+        findlib_paths
+        (fun () ->
+          let+ lines =
+            Process.run_capture_lines ~env Strict ocamlc ["-config"] in
+          ocaml_config_ok_exn
+            (match Ocaml_config.Vars.of_lines lines with
+              | Ok vars -> Ocaml_config.make vars
+              | Error msg -> Error (Ocamlc_config, msg)))
+    in
     let version = Ocaml_version.of_ocaml_config ocfg in
     let env =
       (* See comment in ansi_color.ml for setup_env_for_colors.
@@ -499,16 +508,19 @@ let create ~(kind : Kind.t) ~path ~env ~env_nodes ~name ~merlin ~targets
   in
 
   let implicit = not (List.mem ~set:targets Workspace.Context.Target.Native) in
-  create_one ~host:None ~findlib_toolchain:host_toolchain ~implicit ~name ~merlin
-  >>= fun native ->
-  Fiber.parallel_map targets ~f:(function
-    | Native -> Fiber.return None
-    | Named findlib_toolchain ->
-      let name = sprintf "%s.%s" name findlib_toolchain in
-      create_one ~implicit:false ~name ~host:(Some native) ~merlin:false
-        ~findlib_toolchain:(Some findlib_toolchain)
-      >>| Option.some)
-  >>| fun others ->
+  let* native =
+    create_one ~host:None ~findlib_toolchain:host_toolchain
+      ~implicit ~name ~merlin
+  in
+  let+ others =
+    Fiber.parallel_map targets ~f:(function
+      | Native -> Fiber.return None
+      | Named findlib_toolchain ->
+        let name = sprintf "%s.%s" name findlib_toolchain in
+        create_one ~implicit:false ~name ~host:(Some native) ~merlin:false
+          ~findlib_toolchain:(Some findlib_toolchain)
+        >>| Option.some)
+  in
   native :: List.filter_opt others
 
 let opam_config_var t var =
@@ -525,16 +537,18 @@ let opam_version =
     match !res with
     | Some future -> Fiber.Future.wait future
     | None ->
-      Fiber.fork (fun () ->
-        Process.run_capture_line Strict ~env opam ["--version"]
-        >>| fun s ->
-        try
-          Scanf.sscanf s "%d.%d.%d" (fun a b c -> a, b, c)
-        with _ ->
-          die "@{<error>Error@}: `%a config --version' \
-               returned invalid output:\n%s"
-            Path.pp opam s)
-      >>= fun future ->
+      let* future =
+        Fiber.fork (fun () ->
+          let+ version =
+            Process.run_capture_line Strict ~env opam ["--version"]
+          in
+          try
+            Scanf.sscanf version "%d.%d.%d" (fun a b c -> a, b, c)
+          with _ ->
+            die "@{<error>Error@}: `%a config --version' \
+                 returned invalid output:\n%s"
+              Path.pp opam version)
+      in
       res := Some future;
       Fiber.Future.wait future
 
@@ -628,9 +642,10 @@ let install_ocaml_libdir t =
     (* If ocamlfind is present, it has precedence over everything else. *)
     match which t "ocamlfind" with
     | Some fn ->
-      (Process.run_capture_line ~env:t.env Strict fn ["printconf"; "destdir"]
-       >>| fun s ->
-       Some (Path.of_filename_relative_to_initial_cwd s))
+      let+ s =
+        Process.run_capture_line ~env:t.env Strict fn ["printconf"; "destdir"]
+      in
+      Some (Path.of_filename_relative_to_initial_cwd s)
     | None ->
       Fiber.return None
 

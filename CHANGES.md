@@ -1,13 +1,125 @@
 unreleased
 ----------
 
+- Warn when generated `.merlin` does not reflect the preprocessing
+  specification. This occurs when multiple stanzas in the same directory use
+  different preprocessing specifications. This warning can now be disabled with
+  `allow_approx_merlin` (#1947, fix #1946, @rgrinberg)
+
+- Watch mode: display "Success" in green and "Had errors" in red (#1956,
+  @emillon)
+
+- Fix glob dependencies on installed directories (#1965, @rgrinberg)
+
+- Add support for library variants and default implementations. (#1900,
+  @TheLortex)
+
+- Add experimental `$ dune init` command. This command is used to create or
+  update project boilerplate. (#1448, fixes #159, @shonfeder)
+
+1.8.2 (10/03/2019)
+------------------
+
+- Fix auto-generated `index.mld`. Use correct headings for the listing. (#1925,
+  @rgrinberg, @aantron)
+
+1.8.1 (08/03/2019)
+------------------
+
+- Correctly write `dune-package` when version is empty string (#1919, fix #1918,
+  @rgrinberg)
+
+1.8.0 (07/03/2019)
+------------------
+
+- Clean up watch mode polling loop: improves signal handling and error handling
+  during polling (#1912, fix #1907, fix #1671, @aalekseyev)
+
+- Change status messages during polling to be one-line, so that the messages are
+  correctly erased by ^K. (#1912, @aalekseyev)
+
+- Add support for `.cxx` extension for C++ stubs (#1831, @rgrinberg)
+
+- Add `DUNE_WORKSPACE` variable. This variable is equivalent to setting
+  `--workspace` in the command line. (#1711, fix #1503, @rgrinberg)
+
+- Add `c_flags` and `cxx_flags` to env profile settings (#1700 and #1800,
+  @gretay-js)
+
+- Format `dune printenv` output (#1867, fix #1862, @emillon)
+
+- Add the `(promote-into <dir>)` and `(promote-until-clean-into
+  <dir>)` modes for `(rule ...)` stanzas, so that files can be
+  promoted in another directory than the current one. For instance,
+  this is used in merlin to promote menhir generated files in a
+  directory that depends on the version of the compiler (#1890, @diml)
+
+- Improve error message when `dune subst` fails (#1898, fix #1897, @rgrinberg)
+
+- Add more GC counters to catapult traces (fix908, @rgrinberg)
+
+- Add a preprocessor shim for the `let+` syntax of OCaml 4.08 (#1899,
+  implements #1891, @diml)
+
+- Fix generation of `.merlin` files on Windows. `\` characters needed
+  to be escaped (#1869, @mlasson)
+
+- Fix 0 error code when `$ dune format-dune-file` fails. (#1915, fix #1914,
+  @rgrinberg)
+
+- Configurator: deprecated `query_expr` and introduced `query_expr_err` which is
+  the same but with a better error in case it fails. (#1886, @ejgallego)
+
+- Make sure `(menhir (mode promote) ...)` stanzas are ignored when
+  using `--ignore-promoted-rules` or `-p` (#1917, @diml)
+
+1.7.3 (27/02/2019)
+------------------
+
+- Fix interpretation of `META` files containing archives with `/` in
+  the filename. For instance, this was causing llvm to be unusable
+  with dune (#1889, fix #1885, @diml)
+
+- Make errors about menhir stanzas be located (#1881, fix #1876,
+  @diml)
+
+1.7.2 (21/02/2019)
+------------------
+
+- Add `${corrected-suffix}`, `${library-name}` and a few other
+  variables to the list of variables to upgrade. This fixes the
+  support for various framework producing corrections (#1840, #1853,
+  @diml)
+
+- Fix `$ dune subst` failing because the build directory wasn't set. (#1854, fix
+  #1846, @rgrinberg)
+
+- Configurator: Add warning to `Pkg_config.query` when a full package expression
+  is used. Add `Pkg_config.query_expr` for cases when the full power of
+  pkg-config's querying is needed (#1842, fix #1833, @rgrinberg)
+
+- Fix unavailable, optional implementations eagerly breaking the build (#1857,
+  fix #1856, @rgrinberg)
+
+1.7.1 (13/02/2019)
+------------------
+
+- Fix the watch mode (#1837, #1839, fix #1836, @diml)
+
+- Configurator: Fix misquoting when running pkg-config (#1835, fix #1833,
+  @Chris00)
+
+1.7.0 (12/02/2019)
+------------------
+
+
 - Second step of the deprecation of jbuilder: the `jbuilder` binary
   now emits a warning on every startup and both `jbuilder` and `dune`
-  emit warnings when encountering `jbuild` files (#...., @diml)
+  emit warnings when encountering `jbuild` files (#1752, @diml)
 
 - Change the layout of build artifacts inside _build. The new layout enables
   optimizations that depend on the presence of `.cmx` files of private modules
-  (#1676 @bobot)
+  (#1676, @bobot)
 
 - Fix merlin handling of private module visibility (#1653 @bobot)
 
@@ -126,6 +238,21 @@ unreleased
 - Forbid use of `%{targets}` (or `${@}` in jbuild files) inside
   preprocessing actions
   (#1812, fixes #1811, @diml)
+
+- Add `DUNE_PROFILE` environment variable to easily set the profile. (#1806,
+  @rgrinberg)
+
+- Deprecate the undocumented `(no_keep_locs)` field. It was only
+  necessary until virtual libraries were supported (#1822, fix #1816,
+  @diml)
+
+- Rename `unstable-fmt` to `format-dune-file` and remove its `--inplace` option.
+  (#1821, @emillon).
+
+- Autoformatting: `(using fmt 1.1)` will also format dune files (#1821, @emillon).
+
+- Autoformatting: record dependencies on `.ocamlformat-ignore` files (#1824,
+  fixes #1793, @emillon)
 
 1.6.2 (05/12/2018)
 ------------------

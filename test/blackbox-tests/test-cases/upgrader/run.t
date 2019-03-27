@@ -4,6 +4,7 @@
   | (name foo)
   
   Upgrading foo.opam...
+  Upgrading jbuild.inc to dune.inc...
   Upgrading jbuild to dune...
 
   $ cat dune
@@ -21,7 +22,8 @@
    (action
     (with-stdout-to
      z
-     (run echo %{<}))))
+     (run echo %{<})))
+   (mode fallback))
   
   ; other
   ; comment
@@ -31,6 +33,16 @@
   
   ;(sexp
   ;    comment)
+  
+  (include dune.inc)
+
+  $ cat dune.inc
+  (rule
+   (deps
+    (:< a))
+   (targets b)
+   (action
+    (copy %{<} %{targets})))
 
   $ cat foo.opam
   build: [

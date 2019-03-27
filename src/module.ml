@@ -450,7 +450,8 @@ let encode
        ; kind
        } as t) =
   let open Dune_lang.Encoder in
-  let has_impl = (has_impl t) in
+  let has_impl = has_impl t in
+
   let kind =
     match kind with
     | Kind.Impl when has_impl -> None
@@ -470,13 +471,15 @@ let encode
 let decode ~dir =
   let open Dune_lang.Decoder in
   fields (
-    let%map name = field "name" Name.decode
-    and obj_name = field "obj_name" string
-    and visibility = field "visibility" Visibility.decode
-    and kind = field_o "kind" Kind.decode
-    and impl = field_b "impl"
-    and intf = field_b "intf"
-    and obj_dir = field ~default:(Obj_dir.make_external ~dir) "obj_dir" (Obj_dir.decode ~dir)
+    let+ name = field "name" Name.decode
+    and+ obj_name = field "obj_name" string
+    and+ visibility = field "visibility" Visibility.decode
+    and+ kind = field_o "kind" Kind.decode
+    and+ impl = field_b "impl"
+    and+ intf = field_b "intf"
+    and+ obj_dir =
+      let default = Obj_dir.make_external ~dir in
+      field ~default "obj_dir" (Obj_dir.decode ~dir)
     in
     let file exists ml_kind =
       if exists then
@@ -532,3 +535,35 @@ module Source = struct
   | None, Some x -> Some (Path.parent_exn x.path)
 
 end
+
+let pped =
+  let pped_path path ~suffix =
+    (* We need to insert the suffix before the extension as some tools
+       inspect the extension *)
+    let base, ext = Path.split_extension path in
+    Path.extend_basename base ~suffix:(suffix ^ ext)
+  in
+  map_files ~f:(fun _kind file ->
+    let pp_path = pped_path file.path ~suffix:".pp" in
+    { file with path = pp_path })
+
+let ml_source =
+  map_files ~f:(fun _ f ->
+    match f.syntax with
+    | OCaml  -> f
+    | Reason ->
+      let path =
+        let base, ext = Path.split_extension f.path in
+        let suffix =
+          match ext with
+          | ".re"  -> ".re.ml"
+          | ".rei" -> ".re.mli"
+          | _     ->
+            Errors.fail
+              (Loc.in_file (Path.drop_build_context_exn f.path))
+              "Unknown file extension for reason source file: %S"
+              ext
+        in
+        Path.extend_basename base ~suffix
+      in
+      File.make OCaml path)

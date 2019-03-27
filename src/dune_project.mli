@@ -69,6 +69,10 @@ val license : t -> string option
 val authors : t -> string list
 val root : t -> Path.Local.t
 val stanza_parser : t -> Stanza.t list Dune_lang.Decoder.t
+val allow_approx_merlin : t -> bool
+
+val equal : t -> t -> bool
+val hash : t -> int
 
 (** Return the path of the project file. *)
 val file : t -> Path.t
@@ -115,7 +119,7 @@ end
 val load : dir:Path.t -> files:String.Set.t -> t option
 
 (** Read the [name] file from a dune-project file *)
-val read_name : Path.t -> string option
+val read_name : Path.t -> (Loc.t * string) option
 
 (** "dune-project" *)
 val filename : string
@@ -125,6 +129,9 @@ val filename : string
 val anonymous : t Lazy.t
 
 type created_or_already_exist = Created | Already_exist
+
+(** Generate an appropriate project [lang] stanza *)
+val lang_stanza : unit -> string
 
 (** Check that the dune-project file exists and create it otherwise. *)
 val ensure_project_file_exists : t -> created_or_already_exist
@@ -148,5 +155,7 @@ val find_extension_args : t -> 'a Extension.t -> 'a option
 val set_parsing_context : t -> 'a Dune_lang.Decoder.t -> 'a Dune_lang.Decoder.t
 
 val implicit_transitive_deps : t -> bool
+
+val dune_version : t -> Syntax.Version.t
 
 val pp : t Fmt.t
