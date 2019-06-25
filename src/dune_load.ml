@@ -258,7 +258,7 @@ let interpret ~dir ~project ~ignore_promoted_rules
 let load ?(ignore_promoted_rules=false) ~ancestor_vcs () =
   let ftree = File_tree.load Path.Source.root ~ancestor_vcs in
   let projects =
-    File_tree.fold ftree ~traverse_ignored_dirs:false ~init:[]
+    File_tree.fold ftree ~traverse_ignored_dirs:false ~traverse_vendored_dirs:true ~init:[]
       ~f:(fun dir acc ->
         let p = File_tree.Dir.project dir in
         if Path.Source.equal

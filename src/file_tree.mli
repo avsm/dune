@@ -47,6 +47,7 @@ module Dir : sig
   val fold
     :  t
     -> traverse_ignored_dirs:bool
+    -> traverse_vendored_dirs:bool
     -> init:'a
     -> f:(t -> 'a -> 'a)
     -> 'a
@@ -78,6 +79,7 @@ val load
 val fold
   :  t
   -> traverse_ignored_dirs:bool
+  -> traverse_vendored_dirs:bool
   -> init:'a
   -> f:(Dir.t -> 'a -> 'a)
   -> 'a

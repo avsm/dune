@@ -3,10 +3,11 @@ open Stdune
 type 'set t = private
   { dirs : 'set
   ; data_only : 'set
+  ; vendored_dirs : 'set
   }
 
 module Status : sig
-  type t = Ignored | Data_only | Normal
+  type t = Ignored | Data_only | Normal | Vendored
 end
 
 val default : Predicate_lang.t t

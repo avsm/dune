@@ -89,9 +89,17 @@ let load_jbuild_ignore path =
   |> String.Set.of_list
 
 module Dir = struct
+  type status = Ignored | Vendored | Normal
+
+  let status_of_sub_dir_status = function
+    | Sub_dirs.Status.Ignored -> assert false
+    | Vendored -> Vendored
+    | Normal -> Normal
+    | Data_only -> Ignored
+
   type t =
     { path     : Path.Source.t
-    ; ignored  : bool
+    ; status   : status
     ; contents : contents Lazy.t
     ; project  : Dune_project.t
     ; vcs      : Vcs.t option
@@ -103,9 +111,9 @@ module Dir = struct
     ; dune_file : Dune_file.t option
     }
 
-  let create ~project ~path ~ignored ~contents ~vcs =
+  let create ~project ~path ~status ~contents ~vcs =
     { path
-    ; ignored
+    ; status
     ; contents
     ; project
     ; vcs
@@ -114,7 +122,10 @@ module Dir = struct
   let contents t = Lazy.force t.contents
 
   let path t = t.path
-  let ignored t = t.ignored
+  let ignored t =
+    match t.status with
+    | Ignored -> true
+    | Vendored | Normal -> false
 
   let files     t = (contents t).files
   let sub_dirs  t = (contents t).sub_dirs
@@ -135,13 +146,26 @@ module Dir = struct
     String.Map.foldi (sub_dirs t) ~init:Path.Source.Set.empty
       ~f:(fun s _ acc -> Path.Source.Set.add acc (Path.Source.relative t.path s))
 
-  let rec fold t ~traverse_ignored_dirs ~init:acc ~f =
-    if not traverse_ignored_dirs && t.ignored then
+  let skip ~traverse_ignored_dirs ~traverse_vendored_dirs t =
+    match t.status with
+    | Ignored -> not traverse_ignored_dirs
+    | Vendored -> not traverse_vendored_dirs
+    | Normal -> false
+
+  let rec fold t ~traverse_ignored_dirs ~traverse_vendored_dirs ~init:acc ~f =
+    if skip ~traverse_ignored_dirs ~traverse_vendored_dirs t then
       acc
     else
       let acc = f t acc in
       String.Map.fold (sub_dirs t) ~init:acc ~f:(fun t acc ->
-        fold t ~traverse_ignored_dirs ~init:acc ~f)
+        fold t ~traverse_ignored_dirs ~traverse_vendored_dirs ~init:acc ~f)
+
+  let dyn_of_status status =
+    let open Dyn in
+    match status with
+    | Ignored -> Variant ("Ignored", [])
+    | Vendored -> Variant ("Vendored", [])
+    | Normal -> Variant ("Normal", [])
 
   let rec dyn_of_contents { files; sub_dirs; dune_file } =
     let open Dyn in
@@ -152,11 +176,11 @@ module Dir = struct
       ; "project", Dyn.opaque
       ]
 
-  and to_dyn { path ; ignored ; contents = lazy contents ; project = _; vcs } =
+  and to_dyn { path ; status ; contents = lazy contents ; project = _; vcs } =
     let open Dyn in
     Record
       [ "path", Path.Source.to_dyn path
-      ; "ignored", Bool ignored
+      ; "status", dyn_of_status status
       ; "contents", dyn_of_contents contents
       ; "vcs", Dyn.Encoder.option Vcs.to_dyn vcs
       ]
@@ -222,9 +246,10 @@ let readdir path =
 
 let load ?(warn_when_seeing_jbuild_file=true) path ~ancestor_vcs =
   let open Result.O in
-  let rec walk path ~dirs_visited ~project:parent_project ~vcs ~data_only
+  let rec walk path ~dirs_visited ~project:parent_project ~vcs ~dir_status
     : (_, _) Result.t =
     let+ { dirs; files } = readdir path in
+    let data_only = match dir_status with Dir.Ignored -> true | Normal | Vendored -> false in
     let project =
       if data_only then
         parent_project
@@ -302,8 +327,10 @@ let load ?(warn_when_seeing_jbuild_file=true) path ~ancestor_vcs =
           in
           match status with
           | Ignored -> acc
-          | Normal | Data_only ->
-            let data_only = data_only || status = Data_only in
+          | Normal | Data_only | Vendored ->
+            let dir_status =
+              if data_only then Dir.Ignored else Dir.status_of_sub_dir_status status
+            in
             let dirs_visited =
               if Sys.win32 then
                 dirs_visited
@@ -317,19 +344,19 @@ let load ?(warn_when_seeing_jbuild_file=true) path ~ancestor_vcs =
                     (Path.Source.to_string_maybe_quoted path)
             in
             match
-              walk path ~dirs_visited ~project ~data_only ~vcs
+              walk path ~dirs_visited ~project ~dir_status ~vcs
             with
             | Ok dir -> String.Map.add acc fn dir
             | Error _ -> acc)
       in
       { Dir. files; sub_dirs; dune_file })
     in
-    Dir.create ~path ~contents ~ignored:data_only ~project ~vcs
+    Dir.create ~path ~contents ~status:dir_status ~project ~vcs
   in
   match
     walk path
       ~dirs_visited:(File.Map.singleton (File.of_source_path path) path)
-      ~data_only:false
+      ~dir_status:Normal
       ~project:(Lazy.force Dune_project.anonymous)
       ~vcs:ancestor_vcs
   with
@@ -382,7 +409,7 @@ let files_recursively_in t ~prefix_with path =
   match find_dir t path with
   | None -> Path.Set.empty
   | Some dir ->
-    Dir.fold dir ~init:Path.Set.empty ~traverse_ignored_dirs:true
+    Dir.fold dir ~init:Path.Set.empty ~traverse_ignored_dirs:true ~traverse_vendored_dirs:true
       ~f:(fun dir acc ->
         let path = Path.append_source prefix_with (Dir.path dir) in
         String.Set.fold (Dir.files dir) ~init:acc ~f:(fun fn acc ->

@@ -374,8 +374,8 @@ let upgrade ft =
     ; to_edit = []
     }
   in
-  File_tree.fold ft ~traverse_ignored_dirs:false ~init:() ~f:(fun dir () ->
-    upgrade_dir todo dir);
+  File_tree.fold ft ~traverse_ignored_dirs:false ~traverse_vendored_dirs:false ~init:()
+    ~f:(fun dir () -> upgrade_dir todo dir);
   let git = lazy (
     match Bin.which ~path:(Env.path Env.initial) "git" with
     | Some x -> x
