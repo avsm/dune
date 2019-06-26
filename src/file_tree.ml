@@ -146,19 +146,26 @@ module Dir = struct
     String.Map.foldi (sub_dirs t) ~init:Path.Source.Set.empty
       ~f:(fun s _ acc -> Path.Source.Set.add acc (Path.Source.relative t.path s))
 
-  let skip ~traverse_ignored_dirs ~traverse_vendored_dirs t =
+  let skip ~traverse_ignored_dirs ~traverse_vendored_sub_dirs t =
     match t.status with
     | Data_only -> not traverse_ignored_dirs
-    | Vendored -> not traverse_vendored_dirs
+    | Vendored -> not traverse_vendored_sub_dirs
     | Normal -> false
 
-  let rec fold t ~traverse_ignored_dirs ~traverse_vendored_dirs ~init:acc ~f =
-    if skip ~traverse_ignored_dirs ~traverse_vendored_dirs t then
-      acc
-    else
+  let fold t ~traverse_ignored_dirs ~traverse_vendored_sub_dirs ~init:acc ~f =
+    let rec fold_or_skip t acc =
+      if skip ~traverse_ignored_dirs ~traverse_vendored_sub_dirs t then
+        acc
+      else
+        fold t acc
+    and fold t acc =
       let acc = f t acc in
       String.Map.fold (sub_dirs t) ~init:acc ~f:(fun t acc ->
-        fold t ~traverse_ignored_dirs ~traverse_vendored_dirs ~init:acc ~f)
+        fold_or_skip t acc)
+    in
+    match t.status with
+    | Normal | Data_only -> fold_or_skip t acc
+    | Vendored -> fold t acc
 
   let dyn_of_status status =
     let open Dyn in
@@ -409,7 +416,7 @@ let files_recursively_in t ~prefix_with path =
   match find_dir t path with
   | None -> Path.Set.empty
   | Some dir ->
-    Dir.fold dir ~init:Path.Set.empty ~traverse_ignored_dirs:true ~traverse_vendored_dirs:true
+    Dir.fold dir ~init:Path.Set.empty ~traverse_ignored_dirs:true ~traverse_vendored_sub_dirs:true
       ~f:(fun dir acc ->
         let path = Path.append_source prefix_with (Dir.path dir) in
         String.Set.fold (Dir.files dir) ~init:acc ~f:(fun fn acc ->
