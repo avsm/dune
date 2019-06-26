@@ -89,13 +89,13 @@ let load_jbuild_ignore path =
   |> String.Set.of_list
 
 module Dir = struct
-  type status = Ignored | Vendored | Normal
+  type status = Data_only | Vendored | Normal
 
   let status_of_sub_dir_status = function
     | Sub_dirs.Status.Ignored -> assert false
     | Vendored -> Vendored
     | Normal -> Normal
-    | Data_only -> Ignored
+    | Data_only -> Data_only
 
   type t =
     { path     : Path.Source.t
@@ -124,7 +124,7 @@ module Dir = struct
   let path t = t.path
   let ignored t =
     match t.status with
-    | Ignored -> true
+    | Data_only -> true
     | Vendored | Normal -> false
 
   let files     t = (contents t).files
@@ -148,7 +148,7 @@ module Dir = struct
 
   let skip ~traverse_ignored_dirs ~traverse_vendored_dirs t =
     match t.status with
-    | Ignored -> not traverse_ignored_dirs
+    | Data_only -> not traverse_ignored_dirs
     | Vendored -> not traverse_vendored_dirs
     | Normal -> false
 
@@ -163,7 +163,7 @@ module Dir = struct
   let dyn_of_status status =
     let open Dyn in
     match status with
-    | Ignored -> Variant ("Ignored", [])
+    | Data_only -> Variant ("Data_only", [])
     | Vendored -> Variant ("Vendored", [])
     | Normal -> Variant ("Normal", [])
 
@@ -249,7 +249,7 @@ let load ?(warn_when_seeing_jbuild_file=true) path ~ancestor_vcs =
   let rec walk path ~dirs_visited ~project:parent_project ~vcs ~dir_status
     : (_, _) Result.t =
     let+ { dirs; files } = readdir path in
-    let data_only = match dir_status with Dir.Ignored -> true | Normal | Vendored -> false in
+    let data_only = dir_status = Dir.Data_only in
     let project =
       if data_only then
         parent_project
@@ -329,7 +329,7 @@ let load ?(warn_when_seeing_jbuild_file=true) path ~ancestor_vcs =
           | Ignored -> acc
           | Normal | Data_only | Vendored ->
             let dir_status =
-              if data_only then Dir.Ignored else Dir.status_of_sub_dir_status status
+              if data_only then Dir.Data_only else Dir.status_of_sub_dir_status status
             in
             let dirs_visited =
               if Sys.win32 then
