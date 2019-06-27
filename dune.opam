@@ -43,4 +43,6 @@ build: [
   ["ocaml" "bootstrap.ml"]
   ["./boot.exe" "--release" "--subst"] {pinned}
   ["./boot.exe" "--release" "-j" jobs]
+  # workaround for #2329
+  ["cp" "_boot/default/dune.install" "dune.install"]
 ]
