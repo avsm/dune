@@ -231,12 +231,11 @@ let readdir path =
 
 let load ?(warn_when_seeing_jbuild_file=true) path ~ancestor_vcs =
   let open Result.O in
-  let rec walk path ~dirs_visited ~project:parent_project ~vcs ~dir_status
+  let rec walk path ~dirs_visited ~project:parent_project ~vcs ~(dir_status : Sub_dirs.Status.t)
     : (_, _) Result.t =
     let+ { dirs; files } = readdir path in
-    let data_only = dir_status = Sub_dirs.Status.Data_only in
     let project =
-      if data_only then
+      if dir_status = Data_only then
         parent_project
       else
         Option.value (Dune_project.load ~dir:path ~files)
@@ -258,7 +257,7 @@ let load ?(warn_when_seeing_jbuild_file=true) path ~ancestor_vcs =
     in
     let contents = lazy (
       let dune_file, sub_dirs =
-        if data_only then
+        if dir_status = Data_only then
           (None, Sub_dirs.default)
         else
           let dune_file, sub_dirs =
@@ -313,7 +312,12 @@ let load ?(warn_when_seeing_jbuild_file=true) path ~ancestor_vcs =
           match status with
           | Ignored -> acc
           | Status status ->
-            let dir_status = if data_only then Sub_dirs.Status.Data_only else status in
+            let dir_status : Sub_dirs.Status.t =
+              match dir_status, status with
+              | Data_only, _ -> Data_only
+              | Vendored, Normal -> Vendored
+              | _, _ -> status
+            in
             let dirs_visited =
               if Sys.win32 then
                 dirs_visited
