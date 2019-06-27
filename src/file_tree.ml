@@ -89,17 +89,9 @@ let load_jbuild_ignore path =
   |> String.Set.of_list
 
 module Dir = struct
-  type status = Data_only | Vendored | Normal
-
-  let status_of_sub_dir_status = function
-    | Sub_dirs.Status.Ignored -> assert false
-    | Vendored -> Vendored
-    | Normal -> Normal
-    | Data_only -> Data_only
-
   type t =
     { path     : Path.Source.t
-    ; status   : status
+    ; status   : Sub_dirs.Status.t
     ; contents : contents Lazy.t
     ; project  : Dune_project.t
     ; vcs      : Vcs.t option
@@ -167,13 +159,6 @@ module Dir = struct
     | Normal | Data_only -> fold_or_skip t acc
     | Vendored -> fold t acc
 
-  let dyn_of_status status =
-    let open Dyn in
-    match status with
-    | Data_only -> Variant ("Data_only", [])
-    | Vendored -> Variant ("Vendored", [])
-    | Normal -> Variant ("Normal", [])
-
   let rec dyn_of_contents { files; sub_dirs; dune_file } =
     let open Dyn in
     Record
@@ -187,7 +172,7 @@ module Dir = struct
     let open Dyn in
     Record
       [ "path", Path.Source.to_dyn path
-      ; "status", dyn_of_status status
+      ; "status", Sub_dirs.Status.to_dyn status
       ; "contents", dyn_of_contents contents
       ; "vcs", Dyn.Encoder.option Vcs.to_dyn vcs
       ]
@@ -256,7 +241,7 @@ let load ?(warn_when_seeing_jbuild_file=true) path ~ancestor_vcs =
   let rec walk path ~dirs_visited ~project:parent_project ~vcs ~dir_status
     : (_, _) Result.t =
     let+ { dirs; files } = readdir path in
-    let data_only = dir_status = Dir.Data_only in
+    let data_only = dir_status = Sub_dirs.Status.Data_only in
     let project =
       if data_only then
         parent_project
@@ -328,16 +313,14 @@ let load ?(warn_when_seeing_jbuild_file=true) path ~ancestor_vcs =
         |> List.fold_left ~init:String.Map.empty ~f:(fun acc (fn, path, file) ->
           let status =
             if Bootstrap.data_only_path path then
-              Sub_dirs.Status.Ignored
+              Sub_dirs.Status.Or_ignored.Ignored
             else
               Sub_dirs.status sub_dirs ~dir:fn
           in
           match status with
           | Ignored -> acc
-          | Normal | Data_only | Vendored ->
-            let dir_status =
-              if data_only then Dir.Data_only else Dir.status_of_sub_dir_status status
-            in
+          | Status status ->
+            let dir_status = if data_only then Sub_dirs.Status.Data_only else status in
             let dirs_visited =
               if Sys.win32 then
                 dirs_visited

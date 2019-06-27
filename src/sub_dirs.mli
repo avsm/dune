@@ -7,7 +7,13 @@ type 'set t = private
   }
 
 module Status : sig
-  type t = Ignored | Data_only | Normal | Vendored
+  type t = Data_only | Normal | Vendored
+
+  val to_dyn : t -> Dyn.t
+
+  module Or_ignored : sig
+    type nonrec t = Ignored | Status of t
+  end
 end
 
 val default : Predicate_lang.t t
@@ -19,6 +25,6 @@ val add_data_only_dirs
 
 val eval : Predicate_lang.t t -> dirs:string list -> String.Set.t t
 
-val status : String.Set.t t -> dir:string -> Status.t
+val status : String.Set.t t -> dir:string -> Status.Or_ignored.t
 
 val decode : (Predicate_lang.t t * Dune_lang.Ast.t list) Stanza.Decoder.t

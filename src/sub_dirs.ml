@@ -48,14 +48,25 @@ let eval t ~dirs =
   }
 
 module Status = struct
-  type t = Ignored | Data_only | Normal | Vendored
+  type t = Data_only | Normal | Vendored
+
+  let to_dyn t =
+    let open Dyn in
+    match t with
+    | Data_only -> Variant ("Data_only", [])
+    | Vendored -> Variant ("Vendored", [])
+    | Normal -> Variant ("Normal", [])
+
+  module Or_ignored = struct
+    type nonrec t = Ignored | Status of t
+  end
 end
 
-let status t ~dir =
+let status t ~dir : Status.Or_ignored.t =
   match String.Set.mem t.dirs dir, String.Set.mem t.data_only dir, String.Set.mem t.vendored_dirs dir with
-  | true, false, false  -> Status.Normal
-  | true, false, true -> Vendored
-  | true, true, _   -> Data_only
+  | true, false, false  -> Status Normal
+  | true, false, true -> Status Vendored
+  | true, true, _   -> Status Data_only
   | false, false, _ -> Ignored
   | false, true, _  -> assert false
 
