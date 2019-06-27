@@ -114,10 +114,8 @@ module Dir = struct
   let contents t = Lazy.force t.contents
 
   let path t = t.path
-  let ignored t =
-    match t.status with
-    | Data_only -> true
-    | Vendored | Normal -> false
+  let ignored t = t.status = Data_only
+  let vendored t = t.status = Vendored
 
   let files     t = (contents t).files
   let sub_dirs  t = (contents t).sub_dirs
@@ -391,6 +389,9 @@ let file_exists t path =
   | Some dir -> String.Set.mem (Dir.files dir) (Path.Source.basename path)
 
 let dir_exists t path = Option.is_some (find_dir t path)
+
+let dir_is_vendored t path =
+  Option.map ~f:(fun dir -> Dir.vendored dir) (find_dir t path)
 
 let files_recursively_in t ~prefix_with path =
   match find_dir t path with
