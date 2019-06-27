@@ -26,7 +26,7 @@ let libs_under_dir sctx ~db ~dir =
   (let open Option.O in
    let* dir = Path.drop_build_context dir in
    let+ dir = File_tree.find_dir (Super_context.file_tree sctx) dir in
-   File_tree.Dir.fold dir ~traverse_ignored_dirs:true ~traverse_vendored_sub_dirs:true
+   File_tree.Dir.fold dir ~traverse_ignored_dirs:true ~traverse_vendored_dirs:true
      ~init:[] ~f:(fun dir acc ->
        let dir =
          Path.Build.append_source (Super_context.build_dir sctx)

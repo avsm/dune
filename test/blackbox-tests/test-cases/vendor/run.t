@@ -9,10 +9,3 @@ Aliases should not be resolved in vendored sub directories:
   Entering directory 'duniverse'
           test alias tests/runtest
   Hello from main lib!
-
-But when a path within a vendored directory is explicitly specified, aliases should be resolved normally:
-
-  $ dune runtest --root duniverse duniverse/vendored
-  Entering directory 'duniverse'
-          test alias duniverse/vendored/tests/runtest
-  Hello from vendored lib!

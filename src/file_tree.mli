@@ -47,7 +47,7 @@ module Dir : sig
   val fold
     :  t
     -> traverse_ignored_dirs:bool
-    -> traverse_vendored_sub_dirs:bool
+    -> traverse_vendored_dirs:bool
     -> init:'a
     -> f:(t -> 'a -> 'a)
     -> 'a
@@ -75,14 +75,11 @@ val load
 
 (** Passing [~traverse_ignored_dirs:true] to this functions causes the
     whole source tree to be deeply scanned, including ignored
-    sub-trees.
-    If [traverse_vendored_sub_dirs] is [false] then sub directories of the given
-    dir that are marked as vendored directories will be skipped. Note that it means that
-    if the given dir is a vendored one, it will be traversed regardless. *)
+    sub-trees. *)
 val fold
   :  t
   -> traverse_ignored_dirs:bool
-  -> traverse_vendored_sub_dirs:bool
+  -> traverse_vendored_dirs:bool
   -> init:'a
   -> f:(Dir.t -> 'a -> 'a)
   -> 'a
